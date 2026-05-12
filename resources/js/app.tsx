@@ -5,6 +5,8 @@ import { initializeTheme } from '@/hooks/use-appearance';
 import AppLayout from '@/layouts/app-layout';
 import AuthLayout from '@/layouts/auth-layout';
 import SettingsLayout from '@/layouts/settings/layout';
+import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
+import FrontendLayout from './layouts/frontend-layout';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
 
@@ -12,14 +14,14 @@ createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),
     layout: (name) => {
         switch (true) {
-            case name === 'welcome':
-                return null;
+            case name.startsWith('admin/'):
+                return AppLayout;
             case name.startsWith('auth/'):
                 return AuthLayout;
             case name.startsWith('settings/'):
                 return [AppLayout, SettingsLayout];
             default:
-                return AppLayout;
+                return FrontendLayout;
         }
     },
     strictMode: true,
@@ -27,7 +29,19 @@ createInertiaApp({
         return (
             <TooltipProvider delayDuration={0}>
                 {app}
-                <Toaster />
+                <Toaster
+                    position="top-right"
+                    richColors
+                    closeButton
+                    expand={true}
+                    duration={3000}
+                    icons={{
+                        success: <CheckCircle className="h-4 w-4" />,
+                        error: <XCircle className="h-4 w-4" />,
+                        warning: <AlertTriangle className="h-4 w-4" />,
+                        info: <Info className="h-4 w-4" />,
+                    }}
+                />
             </TooltipProvider>
         );
     },
