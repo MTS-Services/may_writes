@@ -22,14 +22,15 @@ export function FrontendHeader() {
 
         <div className="hidden items-center gap-7 md:flex">
           {frontendNavLinks.map((link) => (
-            <Link
+            <Button
               key={link.href}
-              className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-              href={`/${link.href}`}
+              variant="link"
+              size="sm"
+              className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground hover:no-underline px-0 cursor-pointer"
               onClick={() => scrollToHash(link.href)}
             >
               {link.label}
-            </Link>
+            </Button>
           ))}
         </div>
 
