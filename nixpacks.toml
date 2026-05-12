@@ -1,0 +1,22 @@
+# nixpacks.toml
+[phases.setup]
+nixPkgs = ["php83", "php83Packages.composer", "nodejs_20", "postgresql"]
+
+[phases.install]
+cmds = [
+    "composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader",
+    "php artisan wayfinder:generate || true"
+]
+
+[phases.build]
+cmds = [
+    "npm ci --omit=dev",
+    "npm run build"
+]
+
+[phases.setup.environment]
+# PHP Configuration
+PHP_VERSION = "8.3"
+
+[start]
+cmd = "php artisan serve --host=0.0.0.0 --port=8080"
