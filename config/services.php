@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    'anthropic' => [
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-opus-4-5'),
+    ],
+
+    'trello' => [
+        'api_key' => env('TRELLO_API_KEY'),
+        'api_token' => env('TRELLO_API_TOKEN'),
+        'template_board_id' => env('TRELLO_TEMPLATE_BOARD_ID'),
+        'workspace_id' => env('TRELLO_WORKSPACE_ID'),
+    ],
+
 ];

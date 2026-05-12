@@ -2,11 +2,19 @@
 
 namespace App\Providers;
 
+use App\Models\Customer;
+use App\Models\Plan;
+use App\Observers\PlanObserver;
+use App\Services\ClaudeService;
+use App\Services\DocumentService;
+use App\Services\StripePlanCatalogService;
+use App\Services\TrelloService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
+use Laravel\Cashier\Cashier;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -15,7 +23,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(TrelloService::class, fn (): TrelloService => new TrelloService);
+        $this->app->singleton(ClaudeService::class, fn (): ClaudeService => new ClaudeService);
+        $this->app->singleton(DocumentService::class, fn (): DocumentService => new DocumentService);
+        $this->app->singleton(StripePlanCatalogService::class, fn (): StripePlanCatalogService => new StripePlanCatalogService);
     }
 
     /**
@@ -23,6 +34,10 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        Cashier::useCustomerModel(Customer::class);
+
+        Plan::observe(PlanObserver::class);
+
         $this->configureDefaults();
     }
 

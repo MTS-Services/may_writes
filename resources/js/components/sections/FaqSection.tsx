@@ -3,7 +3,7 @@ import { Plus } from 'lucide-react';
 
 import { SectionHeading } from '@/components/sections/SectionHeading';
 import { faqs } from '@/components/sections/home-data';
-import { Button } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 export function FaqSection() {
@@ -36,18 +36,20 @@ export function FaqSection() {
                   <span className="text-[15px] leading-6 font-semibold transition-colors hover:text-primary">
                     {item.q}
                   </span>
-                  <Button
+                  <span
                     aria-hidden="true"
                     className={cn(
+                      buttonVariants({
+                        size: 'icon',
+                        variant: isOpen ? 'default' : 'outline',
+                      }),
                       'pointer-events-none size-6 shrink-0 rounded-full p-0 transition-transform',
                       isOpen && 'rotate-45',
                     )}
-                    size="icon"
                     tabIndex={-1}
-                    variant={isOpen ? 'default' : 'outline'}
                   >
                     <Plus className="size-4" />
-                  </Button>
+                  </span>
                 </button>
                 {isOpen && (
                   <p className="pr-10 pb-5 text-sm leading-7 text-muted-foreground">{item.a}</p>
