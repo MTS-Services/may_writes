@@ -85,11 +85,9 @@ class CheckoutController extends Controller
         return response()->json(['checkout_url' => $session->url]);
     }
 
-    public function success(Request $request): Response
+    public function success(): Response
     {
-        return Inertia::render('public/checkout-success', [
-            'sessionId' => $request->string('session_id')->toString(),
-        ]);
+        return Inertia::render('public/checkout-success');
     }
 
     public function cancel(): Response

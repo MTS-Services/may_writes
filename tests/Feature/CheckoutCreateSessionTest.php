@@ -2,6 +2,16 @@
 
 use App\Models\Plan;
 
+test('checkout success page loads', function () {
+    $this->get(route('checkout.success', ['session_id' => 'cs_test_fake']))
+        ->assertOk();
+});
+
+test('checkout cancel page loads', function () {
+    $this->get(route('checkout.cancel'))
+        ->assertOk();
+});
+
 test('checkout returns service unavailable when stripe secret is missing', function () {
     config(['cashier.secret' => null]);
 

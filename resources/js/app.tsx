@@ -15,8 +15,6 @@ createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),
     layout: (name) => {
         switch (true) {
-            case name.startsWith('public/checkout-'):
-                return undefined;
             case name.startsWith('admin/'):
                 return AdminLayout;
             case name.startsWith('auth/'):
