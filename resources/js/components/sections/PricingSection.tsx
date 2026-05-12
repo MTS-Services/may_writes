@@ -17,6 +17,8 @@ type Plan = {
   price: string;
   features: string[];
   is_featured: boolean;
+  /** When false, checkout is disabled (e.g. no Stripe secret or zero price). */
+  checkout_available?: boolean;
 };
 
 export function PricingSection() {
@@ -50,6 +52,12 @@ export function PricingSection() {
   }, []);
 
   const startCheckout = async (plan: Plan): Promise<void> => {
+    if (plan.checkout_available === false) {
+      toast.error('Checkout is unavailable for this plan (payments not configured or invalid price).');
+
+      return;
+    }
+
     setLoadingPlanId(plan.id);
 
     try {
@@ -164,10 +172,12 @@ export function PricingSection() {
                   className="w-full"
                   size="lg"
                   variant={plan.is_featured ? 'default' : 'secondary'}
-                  disabled={loadingPlanId !== null}
+                  disabled={loadingPlanId !== null || plan.checkout_available === false}
                   onClick={() => void startCheckout(plan)}
                 >
-                  {loadingPlanId === plan.id ? (
+                  {plan.checkout_available === false ? (
+                    'Checkout unavailable'
+                  ) : loadingPlanId === plan.id ? (
                     <span className="inline-flex items-center gap-2">
                       <Loader2 className="size-4 animate-spin" />
                       Redirecting...

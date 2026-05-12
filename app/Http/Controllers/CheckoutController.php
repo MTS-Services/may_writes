@@ -3,16 +3,24 @@
 namespace App\Http\Controllers;
 
 use App\Models\Plan;
+use App\Services\StripePlanCatalogService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Inertia\Inertia;
 use Inertia\Response;
+use InvalidArgumentException;
+use RuntimeException;
 use Stripe\Checkout\Session;
 use Stripe\Exception\ApiErrorException;
 use Stripe\Stripe;
 
 class CheckoutController extends Controller
 {
+    public function __construct(
+        private readonly StripePlanCatalogService $stripePlanCatalog,
+    ) {}
+
     public function createSession(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -28,9 +36,19 @@ class CheckoutController extends Controller
             return response()->json(['message' => 'Selected plan is not available.'], 422);
         }
 
-        if (str_contains($plan->stripe_price_id, 'placeholder')) {
-            return response()->json(['message' => 'Stripe price ID is not configured for this plan.'], 422);
+        if (! filled(config('cashier.secret'))) {
+            return response()->json(['message' => 'Payments are not configured.'], 503);
         }
+
+        try {
+            $this->stripePlanCatalog->ensureActiveRecurringPriceForPlan($plan);
+        } catch (InvalidArgumentException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 422);
+        } catch (RuntimeException $exception) {
+            return response()->json(['message' => $exception->getMessage()], 503);
+        }
+
+        $plan->refresh();
 
         try {
             Stripe::setApiKey((string) config('cashier.secret'));
@@ -56,6 +74,11 @@ class CheckoutController extends Controller
                 ],
             ]);
         } catch (ApiErrorException $exception) {
+            Log::warning('Stripe Checkout session failed', [
+                'plan_id' => $plan->id,
+                'message' => $exception->getMessage(),
+            ]);
+
             return response()->json(['message' => $exception->getMessage()], 422);
         }
 
@@ -76,18 +99,21 @@ class CheckoutController extends Controller
 
     public function getPlans(): JsonResponse
     {
+        $plans = Plan::active()->get();
+
         return response()->json(
-            Plan::active()->get([
-                'id',
-                'name',
-                'slug',
-                'price',
-                'active_requests',
-                'features',
-                'is_featured',
-                'is_active',
-                'sort_order',
-            ]),
+            $plans->map(fn (Plan $plan): array => [
+                'id' => $plan->id,
+                'name' => $plan->name,
+                'slug' => $plan->slug,
+                'price' => (string) $plan->price,
+                'active_requests' => $plan->active_requests,
+                'features' => $plan->features,
+                'is_featured' => $plan->is_featured,
+                'is_active' => $plan->is_active,
+                'sort_order' => $plan->sort_order,
+                'checkout_available' => filled(config('cashier.secret')) && (float) $plan->price > 0,
+            ])->values(),
         );
     }
 }
