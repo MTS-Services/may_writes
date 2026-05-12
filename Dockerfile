@@ -73,8 +73,7 @@ RUN php artisan config:clear \
     && php artisan route:clear \
     && php artisan view:clear \
     && php artisan config:cache \
-    && php artisan view:cache \
-    && php artisan optimize:clear
+    && php artisan view:cache 
 
 # Configure Nginx and Supervisor
 RUN rm -f /etc/nginx/sites-enabled/default
