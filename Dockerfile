@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
     gnupg2 \
     ca-certificates \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
-    && docker-php-ext-install pdo_pgsql mbstring zip exif pcntl gd bcmath \
+    && docker-php-ext-install pdo_mysql mbstring zip exif pcntl gd bcmath \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -73,7 +73,8 @@ RUN php artisan config:clear \
     && php artisan route:clear \
     && php artisan view:clear \
     && php artisan config:cache \
-    && php artisan view:cache 
+    && php artisan view:cache \
+    && php artisan optimize:clear
 
 # Configure Nginx and Supervisor
 RUN rm -f /etc/nginx/sites-enabled/default
