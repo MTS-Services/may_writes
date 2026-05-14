@@ -3,7 +3,8 @@
 namespace App\Services;
 
 use App\Models\TrelloTask;
-use Illuminate\Support\Facades\File;
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use PhpOffice\PhpWord\IOFactory;
 use PhpOffice\PhpWord\PhpWord;
@@ -11,24 +12,19 @@ use PhpOffice\PhpWord\Style\Language;
 
 class DocumentService
 {
-    public string $storagePath;
-
-    public function __construct()
+    /**
+     * Filesystem disk used for generated client DOCX files (same as `FILESYSTEM_DISK` / `filesystems.default`).
+     */
+    public static function documentsDisk(): Filesystem
     {
-        $this->storagePath = storage_path('app/clients');
-        File::ensureDirectoryExists($this->storagePath);
+        return Storage::disk((string) config('filesystems.default'));
     }
 
-    /**
-     * @return array{path:string,filename:string,absolute_path:string}
-     */
     public function generateTaskDocument(TrelloTask $task, string $summary): array
     {
+        $disk = self::documentsDisk();
         $safeName = Str::slug($task->customer->name);
         $safeTitle = Str::slug($task->title, '_');
-        $directory = "{$this->storagePath}/{$safeName}";
-
-        File::ensureDirectoryExists($directory);
 
         $phpWord = new PhpWord;
         $phpWord->getSettings()->setThemeFontLang(new Language(Language::EN_US));
@@ -69,7 +65,10 @@ class DocumentService
 
         $filename = date('Y-m-d').'_'.$safeTitle.'.docx';
         $relativePath = 'clients/'.$safeName.'/'.$filename;
-        $absolutePath = storage_path('app/'.$relativePath);
+
+        $disk->makeDirectory('clients/'.$safeName);
+
+        $absolutePath = $disk->path($relativePath);
         IOFactory::createWriter($phpWord, 'Word2007')->save($absolutePath);
 
         return [

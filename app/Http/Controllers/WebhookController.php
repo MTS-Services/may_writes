@@ -68,6 +68,13 @@ class WebhookController extends Controller
             'status' => 'received',
         ]);
 
+        Log::info('Trello webhook received', [
+            'webhook_log_id' => $log->id,
+            'action_type' => data_get($payload, 'action.type'),
+            'board_id' => data_get($payload, 'action.data.board.id'),
+            'card_id' => data_get($payload, 'action.data.card.id'),
+        ]);
+
         if (data_get($payload, 'action.type') !== 'createCard') {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 

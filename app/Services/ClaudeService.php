@@ -4,7 +4,13 @@ namespace App\Services;
 
 use App\Models\TrelloTask;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
+/**
+ * Calls the Anthropic Messages API (x-api-key). Token and request usage for billing
+ * and rate limits appear in the Anthropic Console under API usage, not necessarily
+ * the same meters as consumer products such as "Claude Design" in the account dashboard.
+ */
 class ClaudeService
 {
     public string $apiKey;
@@ -50,6 +56,14 @@ class ClaudeService
 
         if (! $response->successful()) {
             throw new \RuntimeException('Claude API error: '.$response->body());
+        }
+
+        $usage = $response->json('usage');
+        if (is_array($usage)) {
+            Log::info('Anthropic API usage', [
+                'model' => $this->model,
+                'usage' => $usage,
+            ]);
         }
 
         return (string) data_get($response->json(), 'content.0.text', '');
