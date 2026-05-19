@@ -40,45 +40,46 @@ class TrelloService
     /**
      * @return array{board_id: string, board_url: string, member_id: ?string, webhook_id: ?string, reused_board: bool}
      */
-    public function onboardCustomer(Customer $customer): array
+    public function onboardCustomer(Customer $customer, bool $isRecoveryAttempt = false): array
     {
-        $isResume = filled($customer->trello_board_id);
-        $reusedBoard = false;
-        $boardId = null;
-        $boardUrl = null;
+        $customer->refresh();
 
-        if ($isResume) {
-            $boardId = (string) $customer->trello_board_id;
-            $boardUrl = (string) ($customer->trello_board_url ?? $this->getBoardShortUrl($boardId));
-        } elseif ($this->allowBillableGuest) {
-            $created = $this->createBoard($customer);
-            $boardId = $created['board_id'];
-            $boardUrl = $created['board_url'];
+        $resolution = $this->allowBillableGuest
+            ? $this->resolveBoardForGuestMode($customer)
+            : $this->resolveBoardForLookupMode($customer);
 
-            $customer->update([
-                'trello_board_id' => $boardId,
-                'trello_board_url' => $boardUrl,
-            ]);
-        } else {
-            $existing = $this->findExistingBoardForEmail($customer->email, $customer->id);
+        $boardId = $resolution['board_id'];
+        $boardUrl = $resolution['board_url'];
+        $reusedBoard = $resolution['reused_board'];
+        $isResume = $resolution['is_resume'];
 
-            if ($existing !== null) {
-                $boardId = $existing['board_id'];
-                $boardUrl = $existing['board_url'];
-                $reusedBoard = true;
-            } else {
-                $created = $this->createBoard($customer);
-                $boardId = $created['board_id'];
-                $boardUrl = $created['board_url'];
+        try {
+            $member = $this->inviteMemberToBoard(
+                $boardId,
+                $customer->email,
+                permitBillableGuest: $this->allowBillableGuest,
+                permitBillableReinviteToExistingBoard: $reusedBoard,
+            );
+        } catch (\RuntimeException $exception) {
+            if (
+                ! $isRecoveryAttempt
+                && ! $this->allowBillableGuest
+                && $this->isBillableGuestError($exception)
+            ) {
+                $scanned = $this->findExistingBoardByWorkspaceMemberScan($customer->email);
 
-                $customer->update([
-                    'trello_board_id' => $boardId,
-                    'trello_board_url' => $boardUrl,
-                ]);
+                if ($scanned !== null && $scanned['board_id'] !== $boardId) {
+                    $customer->update([
+                        'trello_board_id' => $scanned['board_id'],
+                        'trello_board_url' => $scanned['board_url'],
+                    ]);
+
+                    return $this->onboardCustomer($customer, isRecoveryAttempt: true);
+                }
             }
-        }
 
-        $member = $this->inviteMemberToBoard($boardId, $customer->email);
+            throw $exception;
+        }
 
         if ($reusedBoard) {
             $cardId = $this->postWelcomeCard($boardId, $customer, true);
@@ -135,51 +136,161 @@ class TrelloService
             return $fromDatabase;
         }
 
-        return $this->findExistingBoardFromTrello($email);
+        $fromTrello = $this->findExistingBoardFromTrello($email);
+
+        if ($fromTrello !== null) {
+            return $fromTrello;
+        }
+
+        return $this->findExistingBoardByWorkspaceMemberScan($email);
     }
 
     /**
      * @return array{id: ?string, username: ?string}
      */
-    public function inviteMemberToBoard(string $boardId, string $email): array
-    {
+    public function inviteMemberToBoard(
+        string $boardId,
+        string $email,
+        bool $permitBillableGuest = false,
+        bool $permitBillableReinviteToExistingBoard = false,
+    ): array {
         $existingMember = $this->findBoardMemberByEmail($boardId, $email);
 
         if ($existingMember !== null) {
             return $existingMember;
         }
 
-        $inviteParams = [
-            'email' => $email,
-            'type' => 'normal',
-        ];
-
-        if ($this->allowBillableGuest) {
-            $inviteParams['allowBillableGuest'] = 'true';
-        }
+        $useBillableGuest = $permitBillableGuest;
 
         try {
-            $member = $this->request('put', "/boards/{$boardId}/members", $inviteParams);
-
-            return [
-                'id' => isset($member['id']) ? (string) $member['id'] : null,
-                'username' => isset($member['username']) ? (string) $member['username'] : null,
-            ];
+            return $this->putBoardMemberInvite($boardId, $email, $useBillableGuest);
         } catch (\RuntimeException $exception) {
             if (! $this->isBillableGuestError($exception)) {
                 throw $exception;
             }
 
-            if (! $this->allowBillableGuest) {
-                throw new \RuntimeException(
-                    'This email is already a multi-board guest in the Trello Workspace. '
-                    .'Set TRELLO_ALLOW_BILLABLE_GUEST=true to create a new paid guest board, '
-                    .'or remove the member from other Workspace boards first. '
-                    .$exception->getMessage(),
-                );
+            if ($permitBillableReinviteToExistingBoard) {
+                return $this->putBoardMemberInvite($boardId, $email, allowBillableGuest: true);
             }
+
+            if ($permitBillableGuest) {
+                return $this->putBoardMemberInviteByMemberId($boardId, $email, allowBillableGuest: true);
+            }
+
+            throw new \RuntimeException(
+                'This email is already a multi-board guest in the Trello Workspace. '
+                .'In lookup mode we reuse an existing board when possible; if none is found, '
+                .'set TRELLO_ALLOW_BILLABLE_GUEST=true to create a new paid guest board. '
+                .$exception->getMessage(),
+            );
+        }
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string, reused_board: bool, is_resume: bool}
+     */
+    private function resolveBoardForLookupMode(Customer $customer): array
+    {
+        $existing = $this->findExistingBoardForEmail($customer->email, $customer->id);
+
+        if ($existing !== null) {
+            $customer->update([
+                'trello_board_id' => $existing['board_id'],
+                'trello_board_url' => $existing['board_url'],
+            ]);
+
+            return [
+                'board_id' => $existing['board_id'],
+                'board_url' => $existing['board_url'],
+                'reused_board' => true,
+                'is_resume' => false,
+            ];
         }
 
+        if (filled($customer->trello_board_id) && $this->boardExistsAndOpen((string) $customer->trello_board_id)) {
+            $existingBoardId = (string) $customer->trello_board_id;
+
+            return [
+                'board_id' => $existingBoardId,
+                'board_url' => (string) ($customer->trello_board_url ?? $this->getBoardShortUrl($existingBoardId)),
+                'reused_board' => true,
+                'is_resume' => $this->findBoardMemberByEmail($existingBoardId, $customer->email) !== null,
+            ];
+        }
+
+        $created = $this->createBoard($customer);
+
+        $customer->update([
+            'trello_board_id' => $created['board_id'],
+            'trello_board_url' => $created['board_url'],
+        ]);
+
+        return [
+            'board_id' => $created['board_id'],
+            'board_url' => $created['board_url'],
+            'reused_board' => false,
+            'is_resume' => false,
+        ];
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string, reused_board: bool, is_resume: bool}
+     */
+    private function resolveBoardForGuestMode(Customer $customer): array
+    {
+        if (filled($customer->trello_board_id)) {
+            $boardId = (string) $customer->trello_board_id;
+
+            return [
+                'board_id' => $boardId,
+                'board_url' => (string) ($customer->trello_board_url ?? $this->getBoardShortUrl($boardId)),
+                'reused_board' => false,
+                'is_resume' => true,
+            ];
+        }
+
+        $created = $this->createBoard($customer);
+
+        $customer->update([
+            'trello_board_id' => $created['board_id'],
+            'trello_board_url' => $created['board_url'],
+        ]);
+
+        return [
+            'board_id' => $created['board_id'],
+            'board_url' => $created['board_url'],
+            'reused_board' => false,
+            'is_resume' => false,
+        ];
+    }
+
+    /**
+     * @return array{id: ?string, username: ?string}
+     */
+    private function putBoardMemberInvite(string $boardId, string $email, bool $allowBillableGuest): array
+    {
+        $inviteParams = [
+            'email' => $email,
+            'type' => 'normal',
+        ];
+
+        if ($allowBillableGuest) {
+            $inviteParams['allowBillableGuest'] = 'true';
+        }
+
+        $member = $this->request('put', "/boards/{$boardId}/members", $inviteParams);
+
+        return [
+            'id' => isset($member['id']) ? (string) $member['id'] : null,
+            'username' => isset($member['username']) ? (string) $member['username'] : null,
+        ];
+    }
+
+    /**
+     * @return array{id: ?string, username: ?string}
+     */
+    private function putBoardMemberInviteByMemberId(string $boardId, string $email, bool $allowBillableGuest): array
+    {
         $searched = $this->searchMemberByEmail($email);
 
         if ($searched === null || ! filled($searched['id'])) {
@@ -188,7 +299,7 @@ class TrelloService
 
         $memberParams = ['type' => 'normal'];
 
-        if ($this->allowBillableGuest) {
+        if ($allowBillableGuest) {
             $memberParams['allowBillableGuest'] = 'true';
         }
 
@@ -384,7 +495,97 @@ class TrelloService
             return $this->boardLookupResult($first);
         }
 
+        $invitedBoards = $this->request('get', "/members/{$member['id']}/boardsInvited", [
+            'fields' => 'name,shortUrl,closed,idOrganization',
+        ]);
+
+        if (is_array($invitedBoards)) {
+            $invitedWorkspaceBoards = [];
+
+            foreach ($invitedBoards as $board) {
+                if (! is_array($board)) {
+                    continue;
+                }
+
+                if ((bool) ($board['closed'] ?? false)) {
+                    continue;
+                }
+
+                if ((string) ($board['idOrganization'] ?? '') !== $this->workspaceId) {
+                    continue;
+                }
+
+                $invitedWorkspaceBoards[] = $board;
+            }
+
+            foreach ($invitedWorkspaceBoards as $board) {
+                $name = Str::lower((string) ($board['name'] ?? ''));
+
+                if (Str::contains($name, $suffix)) {
+                    return $this->boardLookupResult($board);
+                }
+            }
+
+            $firstInvited = $invitedWorkspaceBoards[0] ?? null;
+
+            if ($firstInvited !== null) {
+                return $this->boardLookupResult($firstInvited);
+            }
+        }
+
         return null;
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string}|null
+     */
+    private function findExistingBoardByWorkspaceMemberScan(string $email): ?array
+    {
+        $member = $this->searchMemberByEmail($email);
+
+        if ($member === null || ! filled($member['id'])) {
+            return null;
+        }
+
+        $orgBoards = $this->request('get', "/organizations/{$this->workspaceId}/boards", [
+            'filter' => 'open',
+            'fields' => 'name,shortUrl,closed',
+        ]);
+
+        if (! is_array($orgBoards)) {
+            return null;
+        }
+
+        $suffix = Str::lower($this->boardNameSuffix);
+        $fallback = null;
+
+        foreach ($orgBoards as $board) {
+            if (! is_array($board)) {
+                continue;
+            }
+
+            if ((bool) ($board['closed'] ?? false)) {
+                continue;
+            }
+
+            $boardId = (string) $board['id'];
+
+            if ($this->findBoardMemberByEmail($boardId, $email) === null) {
+                continue;
+            }
+
+            $name = Str::lower((string) ($board['name'] ?? ''));
+
+            if (Str::contains($name, $suffix)) {
+                return $this->boardLookupResult($board);
+            }
+
+            if ($fallback === null) {
+                $fallback = $this->boardLookupResult($board);
+            }
+        }
+
+        return $fallback;
     }
 
     /**

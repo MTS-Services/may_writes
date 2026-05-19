@@ -491,11 +491,181 @@ test('guest mode retries invite with allow billable guest via member id', functi
     });
 });
 
-test('lookup mode throws when billable guest required and flag is false', function () {
+test('lookup mode resume on orphan board switches to existing workspace board when member is there', function () {
     Http::fake(function ($request) {
         $url = $request->url();
 
         if (str_contains($url, '/search/members')) {
+            return Http::response([
+                ['id' => 'member_resume', 'email' => 'resume-orphan@example.com', 'username' => 'resumeuser'],
+            ], 200);
+        }
+
+        if (str_contains($url, '/members/member_resume/boards')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
+            return Http::response([
+                [
+                    'id' => 'board_real',
+                    'shortUrl' => 'https://trello.com/b/board_real',
+                    'name' => 'Resume User Writing Board',
+                    'closed' => false,
+                ],
+                [
+                    'id' => 'board_orphan',
+                    'shortUrl' => 'https://trello.com/b/board_orphan',
+                    'name' => 'Orphan Board',
+                    'closed' => false,
+                ],
+            ], 200);
+        }
+
+        if (str_contains($url, '/boards/board_real/members') && $request->method() === 'GET') {
+            return Http::response([
+                ['id' => 'member_resume', 'email' => 'resume-orphan@example.com', 'username' => 'resumeuser'],
+            ], 200);
+        }
+
+        if (str_contains($url, '/boards/board_orphan/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_real/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/actions/comments')) {
+            return Http::response(['id' => 'action_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Resume Orphan',
+        'email' => 'resume-orphan@example.com',
+        'status' => CustomerStatus::Active,
+        'trello_board_id' => 'board_orphan',
+        'trello_board_url' => 'https://trello.com/b/board_orphan',
+    ]);
+
+    $result = app(TrelloService::class)->onboardCustomer($customer);
+
+    expect($result['reused_board'])->toBeTrue()
+        ->and($result['board_id'])->toBe('board_real');
+
+    Http::assertNotSent(fn ($request) => $request->method() === 'POST' && preg_match('#/boards$#', parse_url($request->url(), PHP_URL_PATH) ?? ''));
+});
+
+test('lookup mode reinvites to existing board with billable guest when member was removed', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([
+                ['id' => 'member_removed', 'email' => 'removed@example.com', 'username' => 'removeduser'],
+            ], 200);
+        }
+
+        if (str_contains($url, '/members/member_removed/boards')) {
+            return Http::response([
+                [
+                    'id' => 'board_existing',
+                    'shortUrl' => 'https://trello.com/b/board_existing',
+                    'name' => 'Removed User Writing Board',
+                    'closed' => false,
+                    'idOrganization' => 'org_workspace',
+                ],
+            ], 200);
+        }
+
+        if (str_contains($url, '/boards/board_existing/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_existing/members') && ! str_contains($url, '/members/member_')) {
+            $params = $request->data();
+
+            if (($params['allowBillableGuest'] ?? null) === 'true') {
+                return Http::response(['id' => 'member_removed', 'username' => 'removeduser'], 200);
+            }
+
+            return Http::response(
+                'Member not allowed to add a multi-board guest without allowBillableGuest parameter',
+                400,
+            );
+        }
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_existing/members/member_removed')) {
+            return Http::response(['id' => 'member_removed', 'username' => 'removeduser'], 200);
+        }
+
+        if (str_contains($url, '/boards/board_existing/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/actions/comments')) {
+            return Http::response(['id' => 'action_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Removed',
+        'email' => 'removed@example.com',
+        'status' => CustomerStatus::Active,
+    ]);
+
+    $result = app(TrelloService::class)->onboardCustomer($customer);
+
+    expect($result['reused_board'])->toBeTrue()
+        ->and($result['board_id'])->toBe('board_existing');
+
+    Http::assertSent(function ($request) {
+        return $request->method() === 'PUT'
+            && str_contains($request->url(), '/boards/board_existing/members')
+            && ! str_contains($request->url(), '/members/member_')
+            && ($request->data()['email'] ?? null) === 'removed@example.com'
+            && ($request->data()['allowBillableGuest'] ?? null) === 'true';
+    });
+});
+
+test('lookup mode throws when billable guest required on new board and no existing board found', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
             return Http::response([], 200);
         }
 
@@ -530,15 +700,120 @@ test('lookup mode throws when billable guest required and flag is false', functi
         ->toThrow(RuntimeException::class, 'TRELLO_ALLOW_BILLABLE_GUEST=true');
 });
 
-test('trello service resume does not create another board', function () {
-    Http::fake([
-        'api.trello.com/1/boards/board_partial/members*' => Http::response([
-            ['id' => 'member_1', 'email' => 'partial@example.com', 'username' => 'partial'],
-        ], 200),
-        'api.trello.com/1/tokens/test_token/webhooks*' => Http::response([
-            ['id' => 'hook_existing', 'idModel' => 'board_partial', 'callbackURL' => 'https://maywrites.test/webhook/trello'],
-        ], 200),
+test('lookup mode reuses customer orphan board with billable reinvite when invite previously failed', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_orphan') && str_contains($url, 'closed')) {
+            return Http::response(['closed' => false], 200);
+        }
+
+        if (str_contains($url, '/boards/board_orphan/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_orphan/members')) {
+            $params = $request->data();
+
+            if (($params['allowBillableGuest'] ?? null) === 'true') {
+                return Http::response(['id' => 'member_1', 'username' => 'orphanuser'], 200);
+            }
+
+            return Http::response(
+                'Member not allowed to add a multi-board guest without allowBillableGuest parameter',
+                400,
+            );
+        }
+
+        if (str_contains($url, '/boards/board_orphan/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/actions/comments')) {
+            return Http::response(['id' => 'action_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Orphan',
+        'email' => 'orphan@example.com',
+        'status' => CustomerStatus::Active,
+        'trello_board_id' => 'board_orphan',
+        'trello_board_url' => 'https://trello.com/b/board_orphan',
     ]);
+
+    $result = app(TrelloService::class)->onboardCustomer($customer);
+
+    expect($result['reused_board'])->toBeTrue()
+        ->and($result['board_id'])->toBe('board_orphan');
+
+    Http::assertNotSent(fn ($request) => $request->method() === 'POST' && str_ends_with(parse_url($request->url(), PHP_URL_PATH) ?? '', '/boards'));
+});
+
+test('trello service resume does not create another board', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_partial') && str_contains($url, '/members') && $request->method() === 'GET') {
+            return Http::response([
+                ['id' => 'member_1', 'email' => 'partial@example.com', 'username' => 'partial'],
+            ], 200);
+        }
+
+        if (str_contains($url, '/boards/board_partial') && str_contains($url, 'closed')) {
+            return Http::response(['closed' => false], 200);
+        }
+
+        if (str_contains($url, '/boards/board_partial/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/actions/comments')) {
+            return Http::response(['id' => 'action_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([
+                ['id' => 'hook_existing', 'idModel' => 'board_partial', 'callbackURL' => 'https://maywrites.test/webhook/trello'],
+            ], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
 
     $customer = Customer::query()->create([
         'name' => 'Partial',
