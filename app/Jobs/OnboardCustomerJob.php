@@ -24,14 +24,8 @@ class OnboardCustomerJob implements ShouldQueue
      */
     public array $backoff = [30, 60, 120];
 
-    /**
-     * Create a new job instance.
-     */
     public function __construct(public Customer $customer) {}
 
-    /**
-     * Execute the job.
-     */
     public function handle(): void
     {
         $this->customer->refresh();
@@ -41,13 +35,8 @@ class OnboardCustomerJob implements ShouldQueue
         }
 
         try {
-            Mail::to($this->customer->email)->send(new WelcomeMail($this->customer));
+            $result = app(TrelloService::class)->onboardCustomer($this->customer);
 
-            $this->customer->update([
-                'welcome_email_sent_at' => now(),
-            ]);
-
-            $result = app(TrelloService::class)->createBoardForCustomer($this->customer);
             $this->customer->update([
                 'trello_board_id' => $result['board_id'],
                 'trello_board_url' => $result['board_url'],
@@ -57,10 +46,22 @@ class OnboardCustomerJob implements ShouldQueue
                 'trello_onboarded_at' => now(),
             ]);
 
-            Log::info('Customer onboarding completed', ['customer_id' => $this->customer->id]);
+            if ($this->customer->welcome_email_sent_at === null) {
+                Mail::to($this->customer->email)->send(new WelcomeMail($this->customer));
+
+                $this->customer->update([
+                    'welcome_email_sent_at' => now(),
+                ]);
+            }
+
+            Log::info('Customer onboarding completed', [
+                'customer_id' => $this->customer->id,
+                'reused_board' => $result['reused_board'],
+            ]);
         } catch (\Throwable $exception) {
             Log::error('Customer onboarding failed', [
                 'customer_id' => $this->customer->id,
+                'trello_board_id' => $this->customer->trello_board_id,
                 'error' => $exception->getMessage(),
             ]);
 

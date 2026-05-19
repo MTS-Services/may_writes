@@ -45,6 +45,8 @@ return [
         'api_token' => env('TRELLO_API_TOKEN'),
         'template_board_id' => env('TRELLO_TEMPLATE_BOARD_ID'),
         'workspace_id' => env('TRELLO_WORKSPACE_ID'),
+        'allow_billable_guest' => env('TRELLO_ALLOW_BILLABLE_GUEST', false),
+        'board_name_suffix' => env('TRELLO_BOARD_NAME_SUFFIX', 'Writing Board'),
     ],
 
 ];
