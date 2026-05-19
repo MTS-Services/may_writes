@@ -4,12 +4,15 @@ namespace App\Http\Controllers;
 
 use App\Enums\CustomerStatus;
 use App\Enums\TrelloTaskStatus;
+use App\Jobs\OffboardCustomerJob;
 use App\Jobs\OnboardCustomerJob;
 use App\Jobs\ProcessTrelloTaskJob;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\TrelloTask;
 use App\Models\WebhookLog;
+use App\Services\CustomerTrelloOffboarding;
+use App\Services\CustomerTrelloProvisioning;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -20,6 +23,11 @@ use Stripe\Webhook;
 
 class WebhookController extends Controller
 {
+    public function __construct(
+        private CustomerTrelloProvisioning $trelloProvisioning,
+        private CustomerTrelloOffboarding $trelloOffboarding,
+    ) {}
+
     public function handleStripe(Request $request): JsonResponse
     {
         $payload = $request->getContent();
@@ -47,8 +55,9 @@ class WebhookController extends Controller
 
         return match ($event->type) {
             'checkout.session.completed' => $this->handleCheckoutCompleted((object) $event->data->object, $log),
-            'customer.subscription.deleted' => $this->handleSubscriptionCancelled((object) $event->data->object, $log),
-            'customer.subscription.updated' => $this->handleSubscriptionUpdated((object) $event->data->object, $log),
+            'customer.subscription.deleted' => $this->handleSubscriptionDeleted((object) $event->data->object, $log),
+            'customer.subscription.updated' => $this->handleSubscriptionUpdated((object) $event->data->object, $log, $event),
+            'invoice.paid' => $this->handleInvoicePaid((object) $event->data->object, $log),
             default => tap(response()->json(['status' => 'ignored']), fn () => $log->update([
                 'status' => 'processed',
                 'processed_at' => now(),
@@ -118,6 +127,9 @@ class WebhookController extends Controller
 
         $plan = Plan::query()->find($planId);
 
+        $subscriptionId = data_get($session, 'subscription');
+        $subscription = $this->retrieveStripeSubscription($subscriptionId);
+
         $customer = Customer::firstOrCreate(
             ['email' => (string) data_get($session, 'customer_details.email')],
             [
@@ -129,14 +141,95 @@ class WebhookController extends Controller
             ],
         );
 
-        $trialAttributes = $this->trialAttributesFromCheckoutSession($session);
+        $trialAttributes = $this->trialAttributesFromSubscription($subscription);
 
         $customer->update(array_merge([
             'stripe_id' => (string) data_get($session, 'customer'),
+            'stripe_subscription_id' => filled($subscriptionId) ? (string) $subscriptionId : null,
             'plan_id' => $plan?->id,
         ], $trialAttributes));
 
-        OnboardCustomerJob::dispatch($customer)->onQueue('default');
+        if ($this->trelloProvisioning->shouldOnboardOnCheckout($subscription)) {
+            OnboardCustomerJob::dispatch($customer)->onQueue('default');
+        }
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json(['status' => 'processed']);
+    }
+
+    private function handleInvoicePaid(object $invoice, WebhookLog $log): JsonResponse
+    {
+        $customer = Customer::query()
+            ->where('stripe_id', (string) data_get($invoice, 'customer'))
+            ->first();
+
+        if ($customer && $this->trelloProvisioning->shouldOnboardOnInvoice($customer, $invoice)) {
+            OnboardCustomerJob::dispatch($customer)->onQueue('default');
+        }
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json(['status' => 'processed']);
+    }
+
+    private function handleSubscriptionDeleted(object $subscription, WebhookLog $log): JsonResponse
+    {
+        $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
+
+        if ($customer) {
+            $customer->update([
+                'status' => CustomerStatus::Cancelled,
+                'cancelled_at' => now(),
+                'cancel_at_period_end' => false,
+                'access_ends_at' => null,
+            ]);
+
+            if ($this->trelloOffboarding->shouldOffboardOnSubscriptionDeleted($customer)) {
+                OffboardCustomerJob::dispatch($customer)->onQueue('default');
+            }
+        }
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json(['status' => 'processed']);
+    }
+
+    private function handleSubscriptionUpdated(object $subscription, WebhookLog $log, object $event): JsonResponse
+    {
+        $priceId = (string) data_get($subscription, 'items.data.0.price.id');
+        $plan = Plan::query()->where('stripe_price_id', $priceId)->first();
+        $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
+
+        if ($customer) {
+            $updates = array_merge(
+                $this->subscriptionSyncAttributes($subscription),
+                $this->trialEndsAtFromSubscription($subscription),
+            );
+
+            if ($plan) {
+                $updates['plan_id'] = $plan->id;
+            }
+
+            $customer->update($updates);
+
+            $previousStatus = data_get($event, 'data.previous_attributes.status');
+
+            if (
+                is_string($previousStatus)
+                && $this->trelloProvisioning->shouldOnboardOnSubscriptionTransition(
+                    $customer,
+                    $previousStatus,
+                    (string) data_get($subscription, 'status', ''),
+                )
+            ) {
+                OnboardCustomerJob::dispatch($customer)->onQueue('default');
+            }
+
+            if ($this->trelloOffboarding->shouldOffboardOnSubscriptionUpdated($customer, $subscription)) {
+                OffboardCustomerJob::dispatch($customer)->onQueue('default');
+            }
+        }
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
@@ -144,29 +237,34 @@ class WebhookController extends Controller
     }
 
     /**
-     * @return array{trial_ends_at: ?Carbon, trial_used_at: ?Carbon}
+     * @return array<string, mixed>
      */
-    private function trialAttributesFromCheckoutSession(object $session): array
+    private function subscriptionSyncAttributes(object $subscription): array
     {
-        $subscriptionId = data_get($session, 'subscription');
+        $cancelAtPeriodEnd = (bool) data_get($subscription, 'cancel_at_period_end', false);
 
-        if (! filled($subscriptionId)) {
-            return [
-                'trial_ends_at' => null,
-                'trial_used_at' => null,
-            ];
+        $attributes = [
+            'stripe_subscription_id' => (string) data_get($subscription, 'id'),
+            'cancel_at_period_end' => $cancelAtPeriodEnd,
+        ];
+
+        $periodEnd = data_get($subscription, 'current_period_end');
+
+        if ($cancelAtPeriodEnd && $periodEnd !== null) {
+            $attributes['access_ends_at'] = Carbon::createFromTimestamp((int) $periodEnd);
+        } elseif (! $cancelAtPeriodEnd) {
+            $attributes['access_ends_at'] = null;
         }
 
-        try {
-            Stripe::setApiKey((string) config('cashier.secret'));
+        return $attributes;
+    }
 
-            $subscription = Subscription::retrieve((string) $subscriptionId);
-        } catch (\Throwable $exception) {
-            Log::warning('Unable to retrieve Stripe subscription for trial sync', [
-                'subscription_id' => $subscriptionId,
-                'message' => $exception->getMessage(),
-            ]);
-
+    /**
+     * @return array{trial_ends_at: ?Carbon, trial_used_at: ?Carbon}
+     */
+    private function trialAttributesFromSubscription(?object $subscription): array
+    {
+        if ($subscription === null) {
             return [
                 'trial_ends_at' => null,
                 'trial_used_at' => null,
@@ -183,7 +281,7 @@ class WebhookController extends Controller
         }
 
         return [
-            'trial_ends_at' => Carbon::createFromTimestamp($trialEnd),
+            'trial_ends_at' => Carbon::createFromTimestamp((int) $trialEnd),
             'trial_used_at' => now(),
         ];
     }
@@ -204,40 +302,23 @@ class WebhookController extends Controller
         ];
     }
 
-    private function handleSubscriptionCancelled(object $subscription, WebhookLog $log): JsonResponse
+    private function retrieveStripeSubscription(mixed $subscriptionId): ?object
     {
-        $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
+        if (! filled($subscriptionId)) {
+            return null;
+        }
 
-        if ($customer) {
-            $customer->update([
-                'status' => CustomerStatus::Cancelled,
-                'cancelled_at' => now(),
+        try {
+            Stripe::setApiKey((string) config('cashier.secret'));
+
+            return Subscription::retrieve((string) $subscriptionId);
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to retrieve Stripe subscription', [
+                'subscription_id' => $subscriptionId,
+                'message' => $exception->getMessage(),
             ]);
+
+            return null;
         }
-
-        $log->update(['status' => 'processed', 'processed_at' => now()]);
-
-        return response()->json(['status' => 'processed']);
-    }
-
-    private function handleSubscriptionUpdated(object $subscription, WebhookLog $log): JsonResponse
-    {
-        $priceId = (string) data_get($subscription, 'items.data.0.price.id');
-        $plan = Plan::query()->where('stripe_price_id', $priceId)->first();
-        $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
-
-        if ($customer) {
-            $updates = $this->trialEndsAtFromSubscription($subscription);
-
-            if ($plan) {
-                $updates['plan_id'] = $plan->id;
-            }
-
-            $customer->update($updates);
-        }
-
-        $log->update(['status' => 'processed', 'processed_at' => now()]);
-
-        return response()->json(['status' => 'processed']);
     }
 }

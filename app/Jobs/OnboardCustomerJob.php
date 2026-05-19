@@ -34,6 +34,12 @@ class OnboardCustomerJob implements ShouldQueue
      */
     public function handle(): void
     {
+        $this->customer->refresh();
+
+        if ($this->customer->trello_onboarded_at !== null) {
+            return;
+        }
+
         try {
             Mail::to($this->customer->email)->send(new WelcomeMail($this->customer));
 
@@ -46,7 +52,9 @@ class OnboardCustomerJob implements ShouldQueue
                 'trello_board_id' => $result['board_id'],
                 'trello_board_url' => $result['board_url'],
                 'trello_member_id' => $result['member_id'],
+                'trello_webhook_id' => $result['webhook_id'],
                 'trello_invited_at' => now(),
+                'trello_onboarded_at' => now(),
             ]);
 
             Log::info('Customer onboarding completed', ['customer_id' => $this->customer->id]);

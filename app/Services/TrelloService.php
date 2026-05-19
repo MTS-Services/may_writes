@@ -48,7 +48,7 @@ class TrelloService
     }
 
     /**
-     * @return array{board_id:string,board_url:string,member_id:?string}
+     * @return array{board_id:string,board_url:string,member_id:?string,webhook_id:?string}
      */
     public function createBoardForCustomer(Customer $customer): array
     {
@@ -80,7 +80,7 @@ class TrelloService
             ]);
         }
 
-        $this->request('post', '/webhooks', [
+        $webhook = $this->request('post', '/webhooks', [
             'callbackURL' => rtrim((string) config('app.url'), '/').'/webhook/trello',
             'idModel' => $boardId,
             'description' => "MayWrites webhook for {$customer->name}",
@@ -90,7 +90,18 @@ class TrelloService
             'board_id' => $boardId,
             'board_url' => $boardUrl,
             'member_id' => $member['id'] ?? null,
+            'webhook_id' => isset($webhook['id']) ? (string) $webhook['id'] : null,
         ];
+    }
+
+    public function removeMemberFromBoard(string $boardId, string $memberId): void
+    {
+        $this->request('delete', "/boards/{$boardId}/members/{$memberId}");
+    }
+
+    public function deleteBoardWebhook(string $webhookId): void
+    {
+        $this->request('delete', "/webhooks/{$webhookId}");
     }
 
     /**
