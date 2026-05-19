@@ -26,6 +26,7 @@ class OffboardCustomerJob implements ShouldQueue
 
     public function handle(TrelloService $trelloService): void
     {
+        Log::info('OffboardCustomerJob started', ['customer_id' => $this->customer->id]);
         $this->customer->refresh();
 
         if ($this->customer->trello_offboarded_at !== null) {
