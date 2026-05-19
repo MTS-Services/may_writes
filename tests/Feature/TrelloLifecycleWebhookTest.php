@@ -8,6 +8,7 @@ use App\Jobs\OnboardCustomerJob;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Services\TrelloService;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Stripe\Subscription as StripeSubscription;
@@ -368,6 +369,109 @@ test('subscription updated active renewal does not dispatch onboard or offboard'
     Queue::assertNotPushed(OffboardCustomerJob::class);
 });
 
+test('offboard job removes member by email when stored member id matches board id', function () {
+    config([
+        'services.trello.api_key' => 'test_key',
+        'services.trello.api_token' => 'test_token',
+    ]);
+
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/boards/board_bad/members') && $request->method() === 'GET') {
+            return Http::response([
+                [
+                    'id' => 'member_pending',
+                    'email' => 'pending@example.com',
+                    'username' => 'pendinguser',
+                ],
+            ], 200);
+        }
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'DELETE' && str_contains($url, '/boards/board_bad/members/member_pending')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks/hook_bad')) {
+            return Http::response([], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Pending',
+        'email' => 'pending@example.com',
+        'status' => CustomerStatus::Cancelled,
+        'trello_onboarded_at' => now()->subHour(),
+        'trello_board_id' => 'board_bad',
+        'trello_board_url' => 'https://trello.com/b/board_bad',
+        'trello_member_id' => 'board_bad',
+        'trello_webhook_id' => 'hook_bad',
+    ]);
+
+    (new OffboardCustomerJob($customer))->handle(app(TrelloService::class));
+
+    $customer->refresh();
+
+    expect($customer->trello_offboarded_at)->not->toBeNull()
+        ->and($customer->trello_board_id)->toBeNull();
+
+    Http::assertSent(fn ($request) => $request->method() === 'DELETE'
+        && str_contains($request->url(), '/boards/board_bad/members/member_pending'));
+});
+
+test('offboard job completes when trello membership already removed', function () {
+    config([
+        'services.trello.api_key' => 'test_key',
+        'services.trello.api_token' => 'test_token',
+    ]);
+
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/boards/board_done/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_done/memberships')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'DELETE' && str_contains($url, '/boards/board_done/members/member_done')) {
+            return Http::response('membership not found', 404);
+        }
+
+        if (str_contains($url, '/webhooks/hook_done')) {
+            return Http::response([], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Done',
+        'email' => 'done-offboard@example.com',
+        'status' => CustomerStatus::Cancelled,
+        'trello_onboarded_at' => now()->subHour(),
+        'trello_board_id' => 'board_done',
+        'trello_member_id' => 'member_done',
+        'trello_webhook_id' => 'hook_done',
+    ]);
+
+    (new OffboardCustomerJob($customer))->handle(app(TrelloService::class));
+
+    expect($customer->fresh()->trello_offboarded_at)->not->toBeNull();
+});
+
 test('offboard job is idempotent when customer already offboarded', function () {
     $customer = Customer::query()->create([
         'name' => 'Done',
@@ -378,7 +482,7 @@ test('offboard job is idempotent when customer already offboarded', function () 
     ]);
 
     $this->mock(TrelloService::class, function ($mock): void {
-        $mock->shouldNotReceive('removeMemberFromBoard');
+        $mock->shouldNotReceive('removeMemberFromBoardByEmail');
         $mock->shouldNotReceive('deleteBoardWebhook');
     });
 

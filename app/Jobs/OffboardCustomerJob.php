@@ -37,12 +37,11 @@ class OffboardCustomerJob implements ShouldQueue
         }
 
         try {
-            if (filled($this->customer->trello_member_id)) {
-                $trelloService->removeMemberFromBoard(
-                    (string) $this->customer->trello_board_id,
-                    (string) $this->customer->trello_member_id,
-                );
-            }
+            $trelloService->removeMemberFromBoardByEmail(
+                (string) $this->customer->trello_board_id,
+                (string) $this->customer->email,
+                $this->customer->trello_member_id,
+            );
 
             if (filled($this->customer->trello_webhook_id)) {
                 $trelloService->deleteBoardWebhook((string) $this->customer->trello_webhook_id);
