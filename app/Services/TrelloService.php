@@ -44,6 +44,9 @@ class TrelloService
     {
         $customer->refresh();
 
+        $hadBoardBeforeResolution = filled($customer->trello_board_id)
+            && $customer->trello_onboarded_at === null;
+
         $resolution = $this->allowBillableGuest
             ? $this->resolveBoardForGuestMode($customer)
             : $this->resolveBoardForLookupMode($customer);
@@ -81,23 +84,25 @@ class TrelloService
             throw $exception;
         }
 
-        if ($reusedBoard) {
-            $cardId = $this->postWelcomeCard($boardId, $customer, true);
-            $username = $member['username'] ?? null;
-            $mention = filled($username) ? '@'.$username.' ' : '';
-            $this->notifyMemberOnBoard(
-                $cardId,
-                "{$mention}Welcome back to MayWrites! Your writing board is ready — add new requests as cards here.",
-            );
-        } elseif (! $isResume) {
-            $this->postWelcomeCard($boardId, $customer, false);
-        }
-
         $webhookId = $this->ensureBoardWebhook(
             $boardId,
             "MayWrites webhook for {$customer->name}",
             $customer->trello_webhook_id,
         );
+
+        if (! $hadBoardBeforeResolution) {
+            if ($reusedBoard) {
+                $cardId = $this->postWelcomeCard($boardId, $customer, true);
+                $username = $member['username'] ?? null;
+                $mention = filled($username) ? '@'.$username.' ' : '';
+                $this->notifyMemberOnBoard(
+                    $cardId,
+                    "{$mention}Welcome back to MayWrites! Your writing board is ready — add new requests as cards here.",
+                );
+            } elseif (! $isResume) {
+                $this->postWelcomeCard($boardId, $customer, false);
+            }
+        }
 
         return [
             'board_id' => $boardId,
@@ -160,11 +165,21 @@ class TrelloService
             return $existingMember;
         }
 
+        $pendingInvite = $this->findPendingBoardInviteByEmail($boardId, $email);
+
+        if ($pendingInvite !== null) {
+            return $pendingInvite;
+        }
+
         $useBillableGuest = $permitBillableGuest;
 
         try {
             return $this->putBoardMemberInvite($boardId, $email, $useBillableGuest);
         } catch (\RuntimeException $exception) {
+            if ($this->isMemberAlreadyInvitedError($exception)) {
+                return $this->resolveMemberForAlreadyInvited($email);
+            }
+
             if (! $this->isBillableGuestError($exception)) {
                 throw $exception;
             }
@@ -339,12 +354,7 @@ class TrelloService
 
     public function postWelcomeCard(string $boardId, Customer $customer, bool $isReuse): string
     {
-        $lists = $this->getBoardLists($boardId);
-        $firstList = $lists[0] ?? null;
-
-        if ($firstList === null) {
-            throw new \RuntimeException("Board {$boardId} has no lists for welcome card.");
-        }
+        $firstList = $this->resolveFirstListForWelcomeCard($boardId);
 
         $name = $isReuse
             ? '👋 Welcome back to MayWrites'
@@ -632,6 +642,82 @@ class TrelloService
     /**
      * @return array{id: ?string, username: ?string}|null
      */
+    private function findPendingBoardInviteByEmail(string $boardId, string $email): ?array
+    {
+        $member = $this->searchMemberByEmail($email);
+
+        if ($member === null || ! filled($member['id'])) {
+            return null;
+        }
+
+        $invitedBoards = $this->request('get', "/members/{$member['id']}/boardsInvited", [
+            'fields' => 'id',
+        ]);
+
+        if (! is_array($invitedBoards)) {
+            return null;
+        }
+
+        foreach ($invitedBoards as $board) {
+            if (! is_array($board)) {
+                continue;
+            }
+
+            if ((string) ($board['id'] ?? '') === $boardId) {
+                return $member;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{id: ?string, username: ?string}
+     */
+    private function resolveMemberForAlreadyInvited(string $email): array
+    {
+        $member = $this->searchMemberByEmail($email);
+
+        if ($member !== null) {
+            return $member;
+        }
+
+        return [
+            'id' => null,
+            'username' => null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveFirstListForWelcomeCard(string $boardId): array
+    {
+        $lists = $this->getBoardLists($boardId);
+
+        if ($lists !== []) {
+            return $lists[0];
+        }
+
+        usleep(500_000);
+
+        $lists = $this->getBoardLists($boardId);
+
+        if ($lists !== []) {
+            return $lists[0];
+        }
+
+        $list = $this->request('post', '/lists', [
+            'name' => 'Writing Requests',
+            'idBoard' => $boardId,
+        ]);
+
+        return $list;
+    }
+
+    /**
+     * @return array{id: ?string, username: ?string}|null
+     */
     private function searchMemberByEmail(string $email): ?array
     {
         $results = $this->request('get', '/search/members/', [
@@ -705,6 +791,11 @@ class TrelloService
     private function isBillableGuestError(\RuntimeException $exception): bool
     {
         return Str::contains(Str::lower($exception->getMessage()), 'allowbillableguest');
+    }
+
+    private function isMemberAlreadyInvitedError(\RuntimeException $exception): bool
+    {
+        return Str::contains(Str::lower($exception->getMessage()), 'already invited');
     }
 
     /**
