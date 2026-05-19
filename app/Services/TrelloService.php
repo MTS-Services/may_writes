@@ -6,6 +6,7 @@ use App\Models\Customer;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class TrelloService
@@ -463,7 +464,7 @@ class TrelloService
             return null;
         }
 
-        $boards = $this->request('get', "/members/{$member['id']}/boards", [
+        $boards = $this->tryRequest('get', "/members/{$member['id']}/boards", [
             'filter' => 'open',
             'fields' => 'name,shortUrl,closed,idOrganization',
         ]);
@@ -505,7 +506,7 @@ class TrelloService
             return $this->boardLookupResult($first);
         }
 
-        $invitedBoards = $this->request('get', "/members/{$member['id']}/boardsInvited", [
+        $invitedBoards = $this->tryRequest('get', "/members/{$member['id']}/boardsInvited", [
             'fields' => 'name,shortUrl,closed,idOrganization',
         ]);
 
@@ -551,13 +552,17 @@ class TrelloService
      */
     private function findExistingBoardByWorkspaceMemberScan(string $email): ?array
     {
+        if (! filled($this->workspaceId)) {
+            return null;
+        }
+
         $member = $this->searchMemberByEmail($email);
 
         if ($member === null || ! filled($member['id'])) {
             return null;
         }
 
-        $orgBoards = $this->request('get', "/organizations/{$this->workspaceId}/boards", [
+        $orgBoards = $this->tryRequest('get', "/organizations/{$this->workspaceId}/boards", [
             'filter' => 'open',
             'fields' => 'name,shortUrl,closed',
         ]);
@@ -580,7 +585,9 @@ class TrelloService
 
             $boardId = (string) $board['id'];
 
-            if ($this->findBoardMemberByEmail($boardId, $email) === null) {
+            $boardMember = $this->tryFindBoardMemberByEmail($boardId, $email);
+
+            if ($boardMember === null) {
                 continue;
             }
 
@@ -650,7 +657,7 @@ class TrelloService
             return null;
         }
 
-        $invitedBoards = $this->request('get', "/members/{$member['id']}/boardsInvited", [
+        $invitedBoards = $this->tryRequest('get', "/members/{$member['id']}/boardsInvited", [
             'fields' => 'id',
         ]);
 
@@ -720,11 +727,16 @@ class TrelloService
      */
     private function searchMemberByEmail(string $email): ?array
     {
-        $results = $this->request('get', '/search/members/', [
+        $searchParams = [
             'query' => $email,
-            'idOrganization' => $this->workspaceId,
             'limit' => 10,
-        ]);
+        ];
+
+        if (filled($this->workspaceId)) {
+            $searchParams['idOrganization'] = $this->workspaceId;
+        }
+
+        $results = $this->tryRequest('get', '/search/members/', $searchParams);
 
         if (! is_array($results)) {
             return null;
@@ -796,6 +808,57 @@ class TrelloService
     private function isMemberAlreadyInvitedError(\RuntimeException $exception): bool
     {
         return Str::contains(Str::lower($exception->getMessage()), 'already invited');
+    }
+
+    /**
+     * @return array{id: ?string, username: ?string}|null
+     */
+    private function tryFindBoardMemberByEmail(string $boardId, string $email): ?array
+    {
+        try {
+            return $this->findBoardMemberByEmail($boardId, $email);
+        } catch (\RuntimeException $exception) {
+            if ($this->isIgnorableLookupError($exception)) {
+                return null;
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function isIgnorableLookupError(\RuntimeException $exception): bool
+    {
+        $message = Str::lower($exception->getMessage());
+
+        return Str::contains($message, [
+            'model not found',
+            'not found',
+            'invalid value for id',
+            'unauthorized organization',
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>|array<int, array<string, mixed>>|null
+     */
+    private function tryRequest(string $method, string $endpoint, array $params = []): ?array
+    {
+        try {
+            return $this->request($method, $endpoint, $params);
+        } catch (\RuntimeException $exception) {
+            if ($this->isIgnorableLookupError($exception)) {
+                Log::warning('Trello lookup request skipped', [
+                    'method' => $method,
+                    'endpoint' => $endpoint,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                return null;
+            }
+
+            throw $exception;
+        }
     }
 
     /**

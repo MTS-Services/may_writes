@@ -361,6 +361,74 @@ test('lookup mode creates board and invites without allow billable guest when em
     });
 });
 
+test('lookup mode still creates board when workspace scan returns model not found', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([
+                ['id' => 'member_known', 'email' => 'known@example.com', 'username' => 'knownuser'],
+            ], 200);
+        }
+
+        if (str_contains($url, '/members/member_known/boards') && ! str_contains($url, 'boardsInvited')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/members/member_known/boardsInvited')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
+            return Http::response('model not found', 404);
+        }
+
+        if ($request->method() === 'POST' && preg_match('#/boards$#', parse_url($url, PHP_URL_PATH) ?? '')) {
+            return Http::response([
+                'id' => 'board_fallback',
+                'shortUrl' => 'https://trello.com/b/board_fallback',
+            ], 200);
+        }
+
+        if ($request->method() === 'PUT' && str_ends_with($url, '/boards/board_fallback/members')) {
+            return Http::response(['id' => 'member_known', 'username' => 'knownuser'], 200);
+        }
+
+        if (str_contains($url, '/boards/board_fallback/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_fallback/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $customer = Customer::query()->create([
+        'name' => 'Known',
+        'email' => 'known@example.com',
+        'status' => CustomerStatus::Active,
+    ]);
+
+    $result = app(TrelloService::class)->onboardCustomer($customer);
+
+    expect($result['reused_board'])->toBeFalse()
+        ->and($result['board_id'])->toBe('board_fallback');
+});
+
 test('guest mode always creates new board even when member already has a workspace board', function () {
     config(['services.trello.allow_billable_guest' => true]);
 
