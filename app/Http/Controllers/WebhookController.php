@@ -143,11 +143,23 @@ class WebhookController extends Controller
 
         $trialAttributes = $this->trialAttributesFromSubscription($subscription);
 
+        $reactivationAttributes = [];
+
+        if ($customer->trello_offboarded_at !== null) {
+            $reactivationAttributes = [
+                'trello_offboarded_at' => null,
+                'status' => CustomerStatus::Active,
+                'cancelled_at' => null,
+                'cancel_at_period_end' => false,
+                'access_ends_at' => null,
+            ];
+        }
+
         $customer->update(array_merge([
             'stripe_id' => (string) data_get($session, 'customer'),
             'stripe_subscription_id' => filled($subscriptionId) ? (string) $subscriptionId : null,
             'plan_id' => $plan?->id,
-        ], $trialAttributes));
+        ], $trialAttributes, $reactivationAttributes));
 
         if ($this->trelloProvisioning->shouldOnboardOnCheckout($subscription)) {
             OnboardCustomerJob::dispatch($customer)->onQueue('default');
