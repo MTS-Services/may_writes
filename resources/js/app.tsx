@@ -9,7 +9,7 @@ import SettingsLayout from '@/layouts/settings/layout';
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import FrontendLayout from './layouts/frontend-layout';
 
-const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+const appName = import.meta.env.VITE_APP_NAME || 'MayWrites';
 
 createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),

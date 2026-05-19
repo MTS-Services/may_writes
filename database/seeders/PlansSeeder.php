@@ -71,7 +71,6 @@ class PlansSeeder extends Seeder
                     'Same-day turnaround',
                     'Unlimited revisions',
                     'Dedicated Slack channel',
-                    'Monthly strategy call',
                     'All content types + strategy',
                 ],
             ],

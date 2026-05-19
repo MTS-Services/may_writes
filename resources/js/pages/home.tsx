@@ -16,7 +16,11 @@ export default function HomePage() {
         <title>MayWrites — Unlimited Writing, One Flat Rate</title>
         <meta
           name="description"
-          content="Your on-demand writing team. Copywriting, newsletters, blogs, and more — all in one subscription."
+          content="MayWrites is a content writing service that helps you create high-quality content for your business. We are a team of experienced writers who are dedicated to helping you create content that is engaging, informative, and effective."
+        />
+        <meta
+          name="keywords"
+          content="content writing, content creation, content marketing, content strategy, content optimization, content distribution, content analytics, content insights, content reporting, content optimization, content distribution, content analytics, content insights, content reporting"
         />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
       </Head>
