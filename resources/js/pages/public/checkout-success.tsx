@@ -5,7 +5,19 @@ import { SectionHeading } from '@/components/sections/SectionHeading';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 
-export default function CheckoutSuccessPage() {
+type Props = {
+    trial?: {
+        enabled: boolean;
+        days: number;
+    };
+};
+
+export default function CheckoutSuccessPage({ trial }: Props) {
+    const trialMessage =
+        trial?.enabled && trial.days > 0
+            ? ` Your ${trial.days}-day free trial has started — you will not be charged until it ends, then billing continues monthly.`
+            : '';
+
     return (
         <>
             <Head>
@@ -36,7 +48,7 @@ export default function CheckoutSuccessPage() {
                                         </em>
                                     </>
                                 }
-                                description="Thank you for subscribing. You will receive a welcome email shortly with onboarding details and your Trello workspace invitation when your board is ready."
+                                description={`Thank you for subscribing.${trialMessage} You will receive a welcome email shortly with onboarding details and your Trello workspace invitation when your board is ready.`}
                             />
                             <div className="flex flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
                                 <Button

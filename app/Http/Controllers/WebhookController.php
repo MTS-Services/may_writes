@@ -12,7 +12,10 @@ use App\Models\TrelloTask;
 use App\Models\WebhookLog;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Stripe\Stripe;
+use Stripe\Subscription;
 use Stripe\Webhook;
 
 class WebhookController extends Controller
@@ -126,16 +129,79 @@ class WebhookController extends Controller
             ],
         );
 
-        $customer->update([
+        $trialAttributes = $this->trialAttributesFromCheckoutSession($session);
+
+        $customer->update(array_merge([
             'stripe_id' => (string) data_get($session, 'customer'),
             'plan_id' => $plan?->id,
-        ]);
+        ], $trialAttributes));
 
         OnboardCustomerJob::dispatch($customer)->onQueue('default');
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
         return response()->json(['status' => 'processed']);
+    }
+
+    /**
+     * @return array{trial_ends_at: ?Carbon, trial_used_at: ?Carbon}
+     */
+    private function trialAttributesFromCheckoutSession(object $session): array
+    {
+        $subscriptionId = data_get($session, 'subscription');
+
+        if (! filled($subscriptionId)) {
+            return [
+                'trial_ends_at' => null,
+                'trial_used_at' => null,
+            ];
+        }
+
+        try {
+            Stripe::setApiKey((string) config('cashier.secret'));
+
+            $subscription = Subscription::retrieve((string) $subscriptionId);
+        } catch (\Throwable $exception) {
+            Log::warning('Unable to retrieve Stripe subscription for trial sync', [
+                'subscription_id' => $subscriptionId,
+                'message' => $exception->getMessage(),
+            ]);
+
+            return [
+                'trial_ends_at' => null,
+                'trial_used_at' => null,
+            ];
+        }
+
+        $trialEnd = $subscription->trial_end ?? null;
+
+        if ($trialEnd === null) {
+            return [
+                'trial_ends_at' => null,
+                'trial_used_at' => null,
+            ];
+        }
+
+        return [
+            'trial_ends_at' => Carbon::createFromTimestamp($trialEnd),
+            'trial_used_at' => now(),
+        ];
+    }
+
+    /**
+     * @return array{trial_ends_at: ?Carbon}
+     */
+    private function trialEndsAtFromSubscription(object $subscription): array
+    {
+        $trialEnd = data_get($subscription, 'trial_end');
+
+        if ($trialEnd === null) {
+            return ['trial_ends_at' => null];
+        }
+
+        return [
+            'trial_ends_at' => Carbon::createFromTimestamp((int) $trialEnd),
+        ];
     }
 
     private function handleSubscriptionCancelled(object $subscription, WebhookLog $log): JsonResponse
@@ -160,8 +226,14 @@ class WebhookController extends Controller
         $plan = Plan::query()->where('stripe_price_id', $priceId)->first();
         $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
 
-        if ($plan && $customer) {
-            $customer->update(['plan_id' => $plan->id]);
+        if ($customer) {
+            $updates = $this->trialEndsAtFromSubscription($subscription);
+
+            if ($plan) {
+                $updates['plan_id'] = $plan->id;
+            }
+
+            $customer->update($updates);
         }
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);

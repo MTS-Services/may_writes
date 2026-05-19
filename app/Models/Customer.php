@@ -28,6 +28,8 @@ class Customer extends Model
         'pm_last_four',
         'status',
         'subscribed_at',
+        'trial_ends_at',
+        'trial_used_at',
         'cancelled_at',
     ];
 
@@ -38,6 +40,8 @@ class Customer extends Model
             'trello_invited_at' => 'datetime',
             'welcome_email_sent_at' => 'datetime',
             'subscribed_at' => 'datetime',
+            'trial_ends_at' => 'datetime',
+            'trial_used_at' => 'datetime',
             'cancelled_at' => 'datetime',
         ];
     }
