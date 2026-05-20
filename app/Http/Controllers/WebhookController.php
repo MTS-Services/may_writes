@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Enums\CustomerStatus;
+use App\Enums\TrelloOnboardingStatus;
 use App\Enums\TrelloTaskStatus;
 use App\Jobs\OffboardCustomerJob;
 use App\Jobs\OnboardCustomerJob;
@@ -11,6 +12,7 @@ use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\TrelloTask;
 use App\Models\WebhookLog;
+use App\Services\BillingEventRecorder;
 use App\Services\CustomerTrelloOffboarding;
 use App\Services\CustomerTrelloProvisioning;
 use Illuminate\Http\JsonResponse;
@@ -26,6 +28,7 @@ class WebhookController extends Controller
     public function __construct(
         private CustomerTrelloProvisioning $trelloProvisioning,
         private CustomerTrelloOffboarding $trelloOffboarding,
+        private BillingEventRecorder $billingEventRecorder,
     ) {}
 
     public function handleStripe(Request $request): JsonResponse
@@ -130,10 +133,13 @@ class WebhookController extends Controller
         $subscriptionId = data_get($session, 'subscription');
         $subscription = $this->retrieveStripeSubscription($subscriptionId);
 
+        $email = strtolower(trim((string) data_get($session, 'customer_details.email')));
+        $incomingName = trim((string) data_get($session, 'customer_details.name', ''));
+
         $customer = Customer::firstOrCreate(
-            ['email' => (string) data_get($session, 'customer_details.email')],
+            ['email' => $email],
             [
-                'name' => (string) data_get($session, 'customer_details.name', 'MayWrites Customer'),
+                'name' => filled($incomingName) ? $incomingName : 'MayWrites Customer',
                 'stripe_id' => (string) data_get($session, 'customer'),
                 'plan_id' => $plan?->id,
                 'status' => CustomerStatus::Active,
@@ -156,14 +162,23 @@ class WebhookController extends Controller
         }
 
         $customer->update(array_merge([
+            'name' => filled($incomingName) ? $incomingName : $customer->name,
             'stripe_id' => (string) data_get($session, 'customer'),
             'stripe_subscription_id' => filled($subscriptionId) ? (string) $subscriptionId : null,
             'plan_id' => $plan?->id,
         ], $trialAttributes, $reactivationAttributes));
 
-        if ($this->trelloProvisioning->shouldOnboardOnCheckout($subscription)) {
+        if ($this->trelloProvisioning->shouldOnboardOnCheckout($subscription) && $customer->trello_onboarded_at === null) {
+            $customer->update([
+                'trello_onboarding_status' => TrelloOnboardingStatus::Pending,
+                'trello_onboarding_last_error' => null,
+            ]);
             OnboardCustomerJob::dispatch($customer)->onQueue('default');
         }
+
+        $customer->refresh();
+
+        $this->billingEventRecorder->recordFromWebhook($log, $customer);
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
@@ -176,9 +191,15 @@ class WebhookController extends Controller
             ->where('stripe_id', (string) data_get($invoice, 'customer'))
             ->first();
 
-        if ($customer && $this->trelloProvisioning->shouldOnboardOnInvoice($customer, $invoice)) {
+        if ($customer && $this->trelloProvisioning->shouldOnboardOnInvoice($customer, $invoice) && $customer->trello_onboarded_at === null) {
+            $customer->update([
+                'trello_onboarding_status' => TrelloOnboardingStatus::Pending,
+                'trello_onboarding_last_error' => null,
+            ]);
             OnboardCustomerJob::dispatch($customer)->onQueue('default');
         }
+
+        $this->billingEventRecorder->recordFromWebhook($log, $customer);
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
@@ -201,6 +222,8 @@ class WebhookController extends Controller
                 OffboardCustomerJob::dispatch($customer)->onQueue('default');
             }
         }
+
+        $this->billingEventRecorder->recordFromWebhook($log, $customer);
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
@@ -234,7 +257,12 @@ class WebhookController extends Controller
                     $previousStatus,
                     (string) data_get($subscription, 'status', ''),
                 )
+                && $customer->trello_onboarded_at === null
             ) {
+                $customer->update([
+                    'trello_onboarding_status' => TrelloOnboardingStatus::Pending,
+                    'trello_onboarding_last_error' => null,
+                ]);
                 OnboardCustomerJob::dispatch($customer)->onQueue('default');
             }
 
@@ -242,6 +270,8 @@ class WebhookController extends Controller
                 OffboardCustomerJob::dispatch($customer)->onQueue('default');
             }
         }
+
+        $this->billingEventRecorder->recordFromWebhook($log, $customer);
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 

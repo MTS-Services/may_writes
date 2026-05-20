@@ -2,8 +2,10 @@
 
 namespace App\Jobs;
 
+use App\Enums\TrelloOnboardingStatus;
 use App\Mail\WelcomeMail;
 use App\Models\Customer;
+use App\Notifications\BillingOnboardingFailedNotification;
 use App\Services\TrelloService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -12,6 +14,8 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Str;
 
 class OnboardCustomerJob implements ShouldQueue
 {
@@ -44,6 +48,8 @@ class OnboardCustomerJob implements ShouldQueue
                 'trello_webhook_id' => $result['webhook_id'],
                 'trello_invited_at' => now(),
                 'trello_onboarded_at' => now(),
+                'trello_onboarding_status' => TrelloOnboardingStatus::Completed,
+                'trello_onboarding_last_error' => null,
             ]);
 
             if ($this->customer->welcome_email_sent_at === null) {
@@ -75,5 +81,23 @@ class OnboardCustomerJob implements ShouldQueue
             'customer_id' => $this->customer->id,
             'error' => $exception->getMessage(),
         ]);
+
+        $this->customer->refresh();
+
+        if ($this->customer->trello_onboarded_at !== null) {
+            return;
+        }
+
+        $this->customer->update([
+            'trello_onboarding_status' => TrelloOnboardingStatus::Failed,
+            'trello_onboarding_last_error' => Str::limit($exception->getMessage(), 500, ''),
+        ]);
+
+        $to = config('billing.alerts.onboarding_failure_email');
+
+        if (filled($to)) {
+            Notification::route('mail', $to)
+                ->notify(new BillingOnboardingFailedNotification($this->customer, $exception));
+        }
     }
 }

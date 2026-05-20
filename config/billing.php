@@ -33,4 +33,39 @@ return [
         'provision_on_checkout' => env('TRELLO_PROVISION_ON_CHECKOUT', true),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Operations alerts
+    |--------------------------------------------------------------------------
+    |
+    | When Trello onboarding permanently fails (queue retries exhausted), a
+    | notification is sent to this address if set. Leave empty to log only.
+    |
+    */
+
+    'alerts' => [
+        'onboarding_failure_email' => env('BILLING_ONBOARDING_FAILURE_EMAIL'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Customer-facing copy
+    |--------------------------------------------------------------------------
+    */
+
+    'support' => [
+        'checkout_followup_minutes' => (int) env('BILLING_CHECKOUT_FOLLOWUP_MINUTES', 15),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Future: optional accounts (deferred)
+    |--------------------------------------------------------------------------
+    |
+    | Magic-link post-checkout or Laravel Fortify are not required for billing
+    | audit or Trello fulfillment; add only if you need self-serve beyond Stripe
+    | Customer Portal.
+    |
+    */
+
 ];
