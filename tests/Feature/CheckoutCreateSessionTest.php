@@ -1,10 +1,17 @@
 <?php
 
 use App\Models\Plan;
+use Inertia\Testing\AssertableInertia as Assert;
 
 test('checkout success page loads', function () {
+    config(['billing.support.checkout_followup_minutes' => 20]);
+
     $this->get(route('checkout.success', ['session_id' => 'cs_test_fake']))
-        ->assertOk();
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('public/checkout-success')
+            ->where('checkoutFollowupMinutes', 20),
+        );
 });
 
 test('checkout cancel page loads', function () {

@@ -110,6 +110,7 @@ class CheckoutController extends Controller
     {
         return Inertia::render('public/checkout-success', [
             'trial' => $this->subscriptionTrial->configForFrontend(),
+            'checkoutFollowupMinutes' => (int) config('billing.support.checkout_followup_minutes', 15),
         ]);
     }
 

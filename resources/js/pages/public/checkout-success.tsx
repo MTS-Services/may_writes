@@ -10,9 +10,13 @@ type Props = {
         enabled: boolean;
         days: number;
     };
+    checkoutFollowupMinutes?: number;
 };
 
-export default function CheckoutSuccessPage({ trial }: Props) {
+export default function CheckoutSuccessPage({
+    trial,
+    checkoutFollowupMinutes = 15,
+}: Props) {
     const trialMessage =
         trial?.enabled && trial.days > 0
             ? ` Your ${trial.days}-day free trial has started — you will not be charged until it ends, then billing continues monthly.`
@@ -73,6 +77,18 @@ export default function CheckoutSuccessPage({ trial }: Props) {
                                     </a>
                                 </Button>
                             </div>
+                            <p className="text-sm text-muted-foreground">
+                                If you don&apos;t receive the welcome email within{' '}
+                                {checkoutFollowupMinutes} minutes, email{' '}
+                                <a
+                                    className="font-medium text-primary underline-offset-4 hover:underline"
+                                    href="mailto:hello@maywrites.co"
+                                >
+                                    hello@maywrites.co
+                                </a>{' '}
+                                from the same address you used at checkout so we can
+                                locate your subscription.
+                            </p>
                             <p className="text-sm text-muted-foreground">
                                 Questions?{' '}
                                 <a

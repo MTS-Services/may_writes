@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\CustomerStatus;
+use App\Enums\TrelloOnboardingStatus;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -27,6 +28,8 @@ class Customer extends Model
         'trello_invited_at',
         'trello_onboarded_at',
         'trello_offboarded_at',
+        'trello_onboarding_status',
+        'trello_onboarding_last_error',
         'welcome_email_sent_at',
         'pm_type',
         'pm_last_four',
@@ -46,6 +49,7 @@ class Customer extends Model
             'trello_invited_at' => 'datetime',
             'trello_onboarded_at' => 'datetime',
             'trello_offboarded_at' => 'datetime',
+            'trello_onboarding_status' => TrelloOnboardingStatus::class,
             'access_ends_at' => 'datetime',
             'cancel_at_period_end' => 'boolean',
             'welcome_email_sent_at' => 'datetime',

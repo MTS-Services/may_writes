@@ -3,12 +3,16 @@
 declare(strict_types=1);
 
 use App\Enums\CustomerStatus;
+use App\Enums\TrelloOnboardingStatus;
 use App\Jobs\OffboardCustomerJob;
 use App\Jobs\OnboardCustomerJob;
+use App\Models\BillingEvent;
 use App\Models\Customer;
 use App\Models\Plan;
+use App\Notifications\BillingOnboardingFailedNotification;
 use App\Services\TrelloService;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Notification;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Testing\TestResponse;
 use Stripe\Subscription as StripeSubscription;
@@ -35,22 +39,27 @@ function postStripeWebhook(TestCase $test, string $eventId, string $type, array 
         $data['previous_attributes'] = $previousAttributes;
     }
 
-    $event = (object) [
+    $payload = json_encode([
         'id' => $eventId,
+        'object' => 'event',
         'type' => $type,
-        'data' => (object) $data,
-    ];
+        'created' => time(),
+        'data' => $data,
+    ]);
 
     Mockery::mock('alias:'.StripeWebhook::class)
         ->shouldReceive('constructEvent')
-        ->once()
-        ->andReturn($event);
+        ->zeroOrMoreTimes()
+        ->andReturnUsing(function (...$args) {
+            $payloadBody = (string) $args[0];
+            $decoded = json_decode($payloadBody, true);
 
-    $payload = json_encode([
-        'id' => $eventId,
-        'type' => $type,
-        'data' => $data,
-    ]);
+            return (object) [
+                'id' => $decoded['id'],
+                'type' => $decoded['type'],
+                'data' => (object) $decoded['data'],
+            ];
+        });
 
     return $test->call(
         'POST',
@@ -489,4 +498,167 @@ test('offboard job is idempotent when customer already offboarded', function () 
     (new OffboardCustomerJob($customer))->handle(app(TrelloService::class));
 
     expect($customer->fresh()->trello_offboarded_at)->not->toBeNull();
+});
+
+test('second checkout session completed updates customer display name', function () {
+    Queue::fake();
+
+    $plan = Plan::query()->create([
+        'name' => 'Pro',
+        'slug' => 'name-update-plan',
+        'stripe_price_id' => 'price_name_update',
+        'price' => 899,
+        'active_requests' => 2,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 1,
+    ]);
+
+    Mockery::mock('alias:'.StripeSubscription::class)
+        ->shouldReceive('retrieve')
+        ->twice()
+        ->with('sub_name_update')
+        ->andReturn((object) [
+            'id' => 'sub_name_update',
+            'status' => 'active',
+            'trial_end' => null,
+        ]);
+
+    postStripeWebhook($this, 'evt_checkout_name_1', 'checkout.session.completed', [
+        'id' => 'cs_name_1',
+        'customer' => 'cus_name_1',
+        'subscription' => 'sub_name_update',
+        'metadata' => [
+            'plan_id' => (string) $plan->id,
+        ],
+        'customer_details' => [
+            'email' => 'ali-repeat@example.com',
+            'name' => 'Ali',
+        ],
+    ])->assertOk();
+
+    postStripeWebhook($this, 'evt_checkout_name_2', 'checkout.session.completed', [
+        'id' => 'cs_name_2',
+        'customer' => 'cus_name_1',
+        'subscription' => 'sub_name_update',
+        'metadata' => [
+            'plan_id' => (string) $plan->id,
+        ],
+        'customer_details' => [
+            'email' => 'ali-repeat@example.com',
+            'name' => 'Ali Professional',
+        ],
+    ])->assertOk();
+
+    $customer = Customer::query()->where('email', 'ali-repeat@example.com')->first();
+
+    expect($customer)->not->toBeNull()
+        ->and($customer->name)->toBe('Ali Professional');
+});
+
+test('checkout session completed records billing event', function () {
+    Queue::fake();
+
+    $plan = Plan::query()->create([
+        'name' => 'Pro',
+        'slug' => 'billing-ev-plan',
+        'stripe_price_id' => 'price_billing_ev',
+        'price' => 899,
+        'active_requests' => 2,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 1,
+    ]);
+
+    Mockery::mock('alias:'.StripeSubscription::class)
+        ->shouldReceive('retrieve')
+        ->once()
+        ->with('sub_billing_1')
+        ->andReturn((object) [
+            'id' => 'sub_billing_1',
+            'status' => 'active',
+            'trial_end' => null,
+        ]);
+
+    postStripeWebhook($this, 'evt_billing_checkout_1', 'checkout.session.completed', [
+        'id' => 'cs_billing_1',
+        'customer' => 'cus_billing_1',
+        'subscription' => 'sub_billing_1',
+        'amount_total' => 89900,
+        'currency' => 'usd',
+        'metadata' => [
+            'plan_id' => (string) $plan->id,
+        ],
+        'customer_details' => [
+            'email' => 'billing-ev@example.com',
+            'name' => 'Billing',
+        ],
+    ])->assertOk();
+
+    $event = BillingEvent::query()->where('stripe_event_id', 'evt_billing_checkout_1')->first();
+
+    expect($event)->not->toBeNull()
+        ->and($event->event_type)->toBe('checkout.session.completed')
+        ->and($event->amount_cents)->toBe(89900)
+        ->and($event->currency)->toBe('USD')
+        ->and($event->customer_id)->not->toBeNull();
+});
+
+test('onboard customer job failed updates status and notifies ops email', function () {
+    Notification::fake();
+    config(['billing.alerts.onboarding_failure_email' => 'ops-onboard@example.com']);
+
+    $customer = Customer::query()->create([
+        'name' => 'Fail Board',
+        'email' => 'fail-board@example.com',
+        'stripe_id' => 'cus_fail_board',
+        'status' => CustomerStatus::Active,
+        'trello_onboarding_status' => TrelloOnboardingStatus::Pending,
+    ]);
+
+    (new OnboardCustomerJob($customer))->failed(new RuntimeException('Trello API unavailable'));
+
+    $customer->refresh();
+
+    expect($customer->trello_onboarding_status)->toBe(TrelloOnboardingStatus::Failed)
+        ->and($customer->trello_onboarding_last_error)->toContain('Trello API unavailable');
+
+    Notification::assertSentOnDemand(BillingOnboardingFailedNotification::class);
+});
+
+test('retry trello onboarding command queues job when not yet onboarded', function () {
+    Queue::fake();
+
+    $customer = Customer::query()->create([
+        'name' => 'Retry',
+        'email' => 'retry-board@example.com',
+        'stripe_id' => 'cus_retry_board',
+        'status' => CustomerStatus::Active,
+        'trello_onboarding_status' => TrelloOnboardingStatus::Failed,
+    ]);
+
+    $this->artisan('customers:retry-trello-onboarding', ['identifier' => 'retry-board@example.com'])
+        ->assertSuccessful();
+
+    Queue::assertPushed(OnboardCustomerJob::class, fn (OnboardCustomerJob $job) => $job->customer->is($customer));
+});
+
+test('retry trello onboarding command refuses when already onboarded', function () {
+    Queue::fake();
+
+    Customer::query()->create([
+        'name' => 'Done',
+        'email' => 'done-retry@example.com',
+        'stripe_id' => 'cus_done_retry',
+        'status' => CustomerStatus::Active,
+        'trello_onboarded_at' => now(),
+        'trello_board_id' => 'board_done',
+    ]);
+
+    $this->artisan('customers:retry-trello-onboarding', ['identifier' => 'done-retry@example.com'])
+        ->assertFailed();
+
+    Queue::assertNothingPushed();
 });
