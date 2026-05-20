@@ -439,6 +439,8 @@ class TrelloService
      */
     private function createBoard(Customer $customer): array
     {
+        $customer->loadMissing('plan');
+
         $board = $this->request('post', '/boards', [
             'name' => $this->boardDisplayName($customer),
             'defaultLists' => false,
@@ -823,6 +825,12 @@ class TrelloService
 
     private function boardDisplayName(Customer $customer): string
     {
+        $planName = $customer->plan?->name;
+
+        if (filled($planName)) {
+            return "{$customer->name}'s {$planName} {$this->boardNameSuffix}";
+        }
+
         return "{$customer->name}'s {$this->boardNameSuffix}";
     }
 

@@ -301,6 +301,74 @@ test('lookup mode prefers writing board when member has multiple workspace board
         ->and($result['board_id'])->toBe('board_writing');
 });
 
+test('board name includes plan name when customer has plan', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'POST' && preg_match('#/boards$#', parse_url($url, PHP_URL_PATH) ?? '')) {
+            return Http::response([
+                'id' => 'board_pro',
+                'shortUrl' => 'https://trello.com/b/board_pro',
+            ], 200);
+        }
+
+        if ($request->method() === 'PUT' && str_ends_with($url, '/boards/board_pro/members')) {
+            return Http::response(['id' => 'member_pro', 'username' => 'prouser'], 200);
+        }
+
+        if (str_contains($url, '/boards/board_pro/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/boards/board_pro/lists')) {
+            return Http::response([['id' => 'list_1']], 200);
+        }
+
+        if (str_contains($url, '/cards') && $request->method() === 'POST') {
+            return Http::response(['id' => 'card_1'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $plan = Plan::query()->create([
+        'name' => 'Pro',
+        'slug' => 'board-name-pro',
+        'stripe_price_id' => 'price_board_name_pro',
+        'price' => 899,
+        'active_requests' => 2,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 1,
+    ]);
+
+    $customer = Customer::query()->create([
+        'name' => 'Pro User',
+        'email' => 'pro-board@example.com',
+        'status' => CustomerStatus::Active,
+        'plan_id' => $plan->id,
+    ]);
+
+    app(TrelloService::class)->onboardCustomer($customer);
+
+    Http::assertSent(fn ($request) => $request->method() === 'POST'
+        && preg_match('#/boards$#', parse_url($request->url(), PHP_URL_PATH) ?? '')
+        && $request['name'] === "Pro User's Pro Writing Board");
+});
+
 test('lookup mode creates board and invites without allow billable guest when email not in trello', function () {
     Http::fake(function ($request) {
         $url = $request->url();
