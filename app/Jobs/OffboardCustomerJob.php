@@ -26,6 +26,7 @@ class OffboardCustomerJob implements ShouldQueue
 
     public function handle(TrelloService $trelloService): void
     {
+        Log::info('OffboardCustomerJob started', ['customer_id' => $this->customer->id]);
         $this->customer->refresh();
 
         if ($this->customer->trello_offboarded_at !== null) {
@@ -37,12 +38,11 @@ class OffboardCustomerJob implements ShouldQueue
         }
 
         try {
-            if (filled($this->customer->trello_member_id)) {
-                $trelloService->removeMemberFromBoard(
-                    (string) $this->customer->trello_board_id,
-                    (string) $this->customer->trello_member_id,
-                );
-            }
+            $trelloService->removeMemberFromBoardByEmail(
+                (string) $this->customer->trello_board_id,
+                (string) $this->customer->email,
+                $this->customer->trello_member_id,
+            );
 
             if (filled($this->customer->trello_webhook_id)) {
                 $trelloService->deleteBoardWebhook((string) $this->customer->trello_webhook_id);

@@ -296,10 +296,7 @@ class TrelloService
 
         $member = $this->request('put', "/boards/{$boardId}/members", $inviteParams);
 
-        return [
-            'id' => isset($member['id']) ? (string) $member['id'] : null,
-            'username' => isset($member['username']) ? (string) $member['username'] : null,
-        ];
+        return $this->memberFromInviteResponse($member, $boardId, $email);
     }
 
     /**
@@ -321,9 +318,15 @@ class TrelloService
 
         $member = $this->request('put', "/boards/{$boardId}/members/{$searched['id']}", $memberParams);
 
+        $resolved = $this->memberFromInviteResponse($member, $boardId, $email);
+
+        if (filled($resolved['id'])) {
+            return $resolved;
+        }
+
         return [
-            'id' => (string) ($member['id'] ?? $searched['id']),
-            'username' => (string) ($member['username'] ?? $searched['username'] ?? ''),
+            'id' => (string) $searched['id'],
+            'username' => (string) ($resolved['username'] ?? $searched['username'] ?? ''),
         ];
     }
 
@@ -379,7 +382,35 @@ class TrelloService
 
     public function removeMemberFromBoard(string $boardId, string $memberId): void
     {
-        $this->request('delete', "/boards/{$boardId}/members/{$memberId}");
+        if ($memberId === $boardId) {
+            throw new \InvalidArgumentException('Trello member id cannot be the same as the board id.');
+        }
+
+        try {
+            $this->request('delete', "/boards/{$boardId}/members/{$memberId}");
+        } catch (\RuntimeException $exception) {
+            if ($this->isMembershipNotFoundError($exception)) {
+                return;
+            }
+
+            throw $exception;
+        }
+    }
+
+    public function removeMemberFromBoardByEmail(string $boardId, string $email, ?string $storedMemberId = null): void
+    {
+        $memberId = $this->resolveMemberIdForRemoval($boardId, $email, $storedMemberId);
+
+        if ($memberId === null) {
+            Log::info('Trello member removal skipped — no membership found on board', [
+                'board_id' => $boardId,
+                'email' => $email,
+            ]);
+
+            return;
+        }
+
+        $this->removeMemberFromBoard($boardId, $memberId);
     }
 
     public function deleteBoardWebhook(string $webhookId): void
@@ -408,6 +439,8 @@ class TrelloService
      */
     private function createBoard(Customer $customer): array
     {
+        $customer->loadMissing('plan');
+
         $board = $this->request('post', '/boards', [
             'name' => $this->boardDisplayName($customer),
             'defaultLists' => false,
@@ -792,6 +825,12 @@ class TrelloService
 
     private function boardDisplayName(Customer $customer): string
     {
+        $planName = $customer->plan?->name;
+
+        if (filled($planName)) {
+            return "{$customer->name}'s {$planName} {$this->boardNameSuffix}";
+        }
+
         return "{$customer->name}'s {$this->boardNameSuffix}";
     }
 
@@ -810,9 +849,114 @@ class TrelloService
         return Str::contains(Str::lower($exception->getMessage()), 'already invited');
     }
 
+    private function isMembershipNotFoundError(\RuntimeException $exception): bool
+    {
+        return Str::contains(Str::lower($exception->getMessage()), 'membership not found');
+    }
+
+    public function resolveMemberIdForRemoval(string $boardId, string $email, ?string $storedMemberId = null): ?string
+    {
+        if (filled($storedMemberId) && $storedMemberId !== $boardId) {
+            return $storedMemberId;
+        }
+
+        $fromMembers = $this->tryFindBoardMemberByEmail($boardId, $email);
+
+        if ($fromMembers !== null && filled($fromMembers['id']) && $fromMembers['id'] !== $boardId) {
+            return $fromMembers['id'];
+        }
+
+        $fromMemberships = $this->findBoardMembershipMemberIdByEmail($boardId, $email);
+
+        if ($fromMemberships !== null) {
+            return $fromMemberships;
+        }
+
+        $pendingInvite = $this->findPendingBoardInviteByEmail($boardId, $email);
+
+        if ($pendingInvite !== null && filled($pendingInvite['id']) && $pendingInvite['id'] !== $boardId) {
+            return $pendingInvite['id'];
+        }
+
+        $fromSearch = $this->searchMemberByEmail($email);
+
+        if ($fromSearch !== null && filled($fromSearch['id']) && $fromSearch['id'] !== $boardId) {
+            return $fromSearch['id'];
+        }
+
+        return null;
+    }
+
     /**
-     * @return array{id: ?string, username: ?string}|null
+     * @param  array<string, mixed>  $response
+     * @return array{id: ?string, username: ?string}
      */
+    private function memberFromInviteResponse(array $response, string $boardId, string $email): array
+    {
+        $memberId = isset($response['idMember'])
+            ? (string) $response['idMember']
+            : (isset($response['id']) ? (string) $response['id'] : null);
+
+        if ($memberId !== null && $memberId !== $boardId) {
+            return [
+                'id' => $memberId,
+                'username' => isset($response['username']) ? (string) $response['username'] : null,
+            ];
+        }
+
+        $fromBoard = $this->tryFindBoardMemberByEmail($boardId, $email);
+
+        if ($fromBoard !== null && filled($fromBoard['id']) && $fromBoard['id'] !== $boardId) {
+            return $fromBoard;
+        }
+
+        $fromSearch = $this->searchMemberByEmail($email);
+
+        if ($fromSearch !== null && filled($fromSearch['id']) && $fromSearch['id'] !== $boardId) {
+            return $fromSearch;
+        }
+
+        return [
+            'id' => null,
+            'username' => isset($response['username']) ? (string) $response['username'] : ($fromSearch['username'] ?? null),
+        ];
+    }
+
+    private function findBoardMembershipMemberIdByEmail(string $boardId, string $email): ?string
+    {
+        $memberships = $this->tryRequest('get', "/boards/{$boardId}/memberships", [
+            'member' => 'true',
+        ]);
+
+        if (! is_array($memberships)) {
+            return null;
+        }
+
+        foreach ($memberships as $membership) {
+            if (! is_array($membership)) {
+                continue;
+            }
+
+            $member = $membership['member'] ?? null;
+
+            if (! is_array($member)) {
+                continue;
+            }
+
+            if (Str::lower((string) ($member['email'] ?? '')) !== Str::lower($email)) {
+                continue;
+            }
+
+            $idMember = (string) ($membership['idMember'] ?? $member['id'] ?? '');
+
+            if (filled($idMember) && $idMember !== $boardId) {
+                return $idMember;
+            }
+        }
+
+        return null;
+    }
+
     private function tryFindBoardMemberByEmail(string $boardId, string $email): ?array
     {
         try {
@@ -832,6 +976,7 @@ class TrelloService
 
         return Str::contains($message, [
             'model not found',
+            'membership not found',
             'not found',
             'invalid value for id',
             'unauthorized organization',
