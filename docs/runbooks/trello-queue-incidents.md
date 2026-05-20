@@ -41,3 +41,7 @@ Set `BILLING_ONBOARDING_FAILURE_EMAIL` in production so a mail is sent when `Onb
 ## Optional auth (deferred)
 
 Post-checkout magic links or full Fortify accounts are not required for this runbook; add only if you need self-serve beyond Stripe Customer Portal.
+
+## Plan changes and Trello webhooks
+
+When a customer already has a Trello board (`trello_onboarded_at` set), **Stripe plan upgrades or downgrades do not re-run onboarding**. The app updates the **board title** via the Trello API so it stays aligned with the current plan name. **AI processing** (`ProcessTrelloTaskJob`) only runs for **new cards created in the Writing Requests list**; the welcome sentinel card in that list is excluded. If someone deletes the welcome card, the app **recreates** it on the next `deleteCard` webhook when the stored welcome card id matches.

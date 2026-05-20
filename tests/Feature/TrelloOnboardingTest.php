@@ -24,6 +24,18 @@ beforeEach(function () {
     ]);
 });
 
+/**
+ * @return array<int, array<string, string>>
+ */
+function trelloDefaultKanbanListFixtures(): array
+{
+    return [
+        ['id' => 'list_writing', 'name' => 'Writing Requests'],
+        ['id' => 'list_in_progress', 'name' => 'In Progress'],
+        ['id' => 'list_completed', 'name' => 'Completed'],
+    ];
+}
+
 test('onboard customer job runs trello before welcome mail', function () {
     Mail::fake();
 
@@ -43,6 +55,10 @@ test('onboard customer job runs trello before welcome mail', function () {
                 'member_id' => 'member_new',
                 'webhook_id' => 'hook_new',
                 'reused_board' => false,
+                'writing_requests_list_id' => 'list_w',
+                'in_progress_list_id' => 'list_p',
+                'completed_list_id' => 'list_c',
+                'welcome_card_id' => 'card_welcome',
             ]);
     });
 
@@ -95,6 +111,10 @@ test('onboard customer job resumes without sending welcome mail twice', function
             'member_id' => 'member_partial',
             'webhook_id' => 'hook_partial',
             'reused_board' => false,
+            'writing_requests_list_id' => 'list_w',
+            'in_progress_list_id' => 'list_p',
+            'completed_list_id' => 'list_c',
+            'welcome_card_id' => null,
         ]);
     });
 
@@ -132,7 +152,7 @@ test('lookup mode reuses existing board discovered via trello search', function 
         }
 
         if (str_contains($url, '/boards/board_existing/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -197,7 +217,7 @@ test('lookup mode reuses any open workspace board without writing board suffix',
         }
 
         if (str_contains($url, '/boards/board_other/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -267,7 +287,7 @@ test('lookup mode prefers writing board when member has multiple workspace board
         }
 
         if (str_contains($url, '/boards/board_writing/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -325,7 +345,7 @@ test('board name includes plan name when customer has plan', function () {
         }
 
         if (str_contains($url, '/boards/board_pro/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -393,7 +413,7 @@ test('lookup mode creates board and invites without allow billable guest when em
         }
 
         if (str_contains($url, '/boards/board_new/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -467,7 +487,7 @@ test('lookup mode still creates board when workspace scan returns model not foun
         }
 
         if (str_contains($url, '/boards/board_fallback/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -519,7 +539,7 @@ test('guest mode always creates new board even when member already has a workspa
         }
 
         if (str_contains($url, '/boards/board_guest_new/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -598,7 +618,7 @@ test('guest mode retries invite with allow billable guest via member id', functi
         }
 
         if (str_contains($url, '/boards/board_new/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -676,7 +696,7 @@ test('lookup mode resume on orphan board switches to existing workspace board wh
         }
 
         if (str_contains($url, '/boards/board_real/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -762,7 +782,7 @@ test('lookup mode reinvites to existing board with billable guest when member wa
         }
 
         if (str_contains($url, '/boards/board_existing/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -881,7 +901,7 @@ test('lookup mode reuses customer orphan board with billable reinvite when invit
         }
 
         if (str_contains($url, '/boards/board_orphan/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -942,7 +962,7 @@ test('trello service resume does not create another board', function () {
         }
 
         if (str_contains($url, '/boards/board_partial/lists')) {
-            return Http::response([['id' => 'list_1']], 200);
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
@@ -1009,6 +1029,10 @@ test('lookup mode treats member already invited as successful onboarding', funct
             return Http::response([], 200);
         }
 
+        if (str_contains($url, '/boards/board_orphan/lists')) {
+            return Http::response(trelloDefaultKanbanListFixtures(), 200);
+        }
+
         if (str_contains($url, '/tokens/test_token/webhooks')) {
             return Http::response([], 200);
         }
@@ -1069,7 +1093,12 @@ test('lookup mode creates a list when board copy has no lists yet', function () 
         }
 
         if ($request->method() === 'POST' && str_ends_with(parse_url($url, PHP_URL_PATH) ?? '', '/lists')) {
-            return Http::response(['id' => 'list_created', 'name' => 'Writing Requests'], 200);
+            $name = (string) data_get($request->data(), 'name', 'list');
+
+            return Http::response([
+                'id' => 'list_'.md5($name),
+                'name' => $name,
+            ], 200);
         }
 
         if (str_contains($url, '/cards') && $request->method() === 'POST') {
