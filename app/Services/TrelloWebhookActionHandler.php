@@ -27,8 +27,99 @@ class TrelloWebhookActionHandler
         return match ($actionType) {
             'createCard' => $this->handleCreateCard($payload, $log),
             'deleteCard' => $this->handleDeleteCard($payload, $log),
+            'archiveList' => $this->handleWritingRequestsListArchiveOrDelete($payload, $log),
+            'deleteList' => $this->handleWritingRequestsListArchiveOrDelete($payload, $log),
+            'updateList' => $this->handleUpdateList($payload, $log),
             default => $this->markProcessedAndIgnore($log),
         };
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleUpdateList(array $payload, WebhookLog $log): JsonResponse
+    {
+        $listClosed = (bool) data_get($payload, 'action.data.list.closed', false);
+        $wasClosed = (bool) data_get($payload, 'action.data.old.closed', false);
+
+        if ($listClosed && ! $wasClosed) {
+            return $this->handleWritingRequestsListArchiveOrDelete($payload, $log);
+        }
+
+        return $this->markProcessedAndIgnore($log);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleWritingRequestsListArchiveOrDelete(array $payload, WebhookLog $log): JsonResponse
+    {
+        $actionType = (string) data_get($payload, 'action.type', '');
+        $boardId = (string) data_get($payload, 'action.data.board.id');
+        $listId = (string) data_get($payload, 'action.data.list.id');
+
+        $customer = Customer::query()->where('trello_board_id', $boardId)->first();
+
+        if ($customer === null || $listId === '') {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        if ($listId !== $customer->trello_writing_requests_list_id) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        try {
+            if ($actionType === 'deleteList') {
+                $this->trelloService->recreateWritingRequestsColumn($customer->fresh());
+            } else {
+                try {
+                    $this->trelloService->unarchiveList($listId);
+                } catch (\Throwable $exception) {
+                    Log::warning('Trello unarchive Writing Requests from webhook failed; recreating column', [
+                        'customer_id' => $customer->id,
+                        'list_id' => $listId,
+                        'error' => $exception->getMessage(),
+                    ]);
+                    $this->trelloService->recreateWritingRequestsColumn($customer->fresh());
+                }
+            }
+
+            $customer->refresh();
+
+            if (
+                filled($customer->trello_writing_requests_list_id)
+                && filled($customer->trello_in_progress_list_id)
+                && filled($customer->trello_completed_list_id)
+            ) {
+                $this->trelloService->applyKanbanListOrder(
+                    (string) $customer->trello_writing_requests_list_id,
+                    (string) $customer->trello_in_progress_list_id,
+                    (string) $customer->trello_completed_list_id,
+                );
+            }
+        } catch (\Throwable $exception) {
+            Log::warning('Trello Writing Requests list restore failed', [
+                'customer_id' => $customer->id,
+                'action_type' => $actionType,
+                'error' => $exception->getMessage(),
+            ]);
+
+            $log->update([
+                'status' => 'failed',
+                'error_message' => Str::limit($exception->getMessage(), 500, ''),
+                'processed_at' => now(),
+            ]);
+
+            return response()->json(['status' => 'processed']);
+        }
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json(['status' => 'processed']);
     }
 
     /**

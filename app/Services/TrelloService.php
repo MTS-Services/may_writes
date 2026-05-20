@@ -83,6 +83,8 @@ class TrelloService
         $inProgressListId = $this->findOrCreateListByName($lists, $boardId, $this->inProgressListName);
         $completedListId = $this->findOrCreateListByName($lists, $boardId, $this->completedListName);
 
+        $this->applyKanbanListOrder($writingRequestsListId, $inProgressListId, $completedListId);
+
         return [
             'writing_requests_list_id' => $writingRequestsListId,
             'in_progress_list_id' => $inProgressListId,
@@ -91,22 +93,108 @@ class TrelloService
     }
 
     /**
+     * Left-to-right: Writing Requests → In Progress → Completed (Trello uses ascending pos).
+     */
+    public function applyKanbanListOrder(string $writingRequestsListId, string $inProgressListId, string $completedListId): void
+    {
+        try {
+            $this->request('put', "/lists/{$completedListId}", ['pos' => 'bottom']);
+            $this->request('put', "/lists/{$inProgressListId}", ['pos' => 'bottom']);
+            $this->request('put', "/lists/{$writingRequestsListId}", ['pos' => 'top']);
+        } catch (\Throwable $exception) {
+            Log::warning('Trello kanban list ordering failed', [
+                'board_list_ids' => [$writingRequestsListId, $inProgressListId, $completedListId],
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    public function unarchiveList(string $listId): void
+    {
+        $this->request('put', "/lists/{$listId}", ['closed' => false]);
+    }
+
+    /**
+     * Writing Requests list was removed from the board; create a new list, sentinel card, and persist ids.
+     */
+    public function recreateWritingRequestsColumn(Customer $customer): string
+    {
+        if (! filled($customer->trello_board_id)) {
+            throw new \RuntimeException('Cannot recreate Writing Requests list: customer has no Trello board.');
+        }
+
+        $boardId = (string) $customer->trello_board_id;
+        $customer->loadMissing('plan');
+
+        $inProgressId = $customer->trello_in_progress_list_id;
+        $completedId = $customer->trello_completed_list_id;
+
+        $list = $this->request('post', '/lists', [
+            'name' => $this->writingRequestsListName,
+            'idBoard' => $boardId,
+            'pos' => 'top',
+        ]);
+
+        $newWritingId = (string) $list['id'];
+
+        $welcomeId = $this->postWelcomeCard(
+            $boardId,
+            $customer,
+            isReuse: false,
+            isSentinelRestore: true,
+            writingListId: $newWritingId,
+        );
+
+        $customer->update([
+            'trello_writing_requests_list_id' => $newWritingId,
+            'trello_welcome_card_id' => $welcomeId,
+        ]);
+
+        if (filled($inProgressId) && filled($completedId)) {
+            $this->applyKanbanListOrder($newWritingId, $inProgressId, $completedId);
+        }
+
+        return $newWritingId;
+    }
+
+    /**
      * Resolve the Writing Requests list id from the board, persist on the customer when missing, or null.
      */
     public function resolveAndPersistWritingRequestsList(Customer $customer): ?string
     {
-        if (filled($customer->trello_writing_requests_list_id)) {
-            return (string) $customer->trello_writing_requests_list_id;
-        }
-
         if (! filled($customer->trello_board_id)) {
             return null;
         }
 
         $boardId = (string) $customer->trello_board_id;
         $lists = $this->getBoardLists($boardId);
-        $id = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
 
+        if (filled($customer->trello_writing_requests_list_id)) {
+            $storedId = (string) $customer->trello_writing_requests_list_id;
+            $existing = $this->findListInBoardListsById($lists, $storedId);
+
+            if ($existing === null) {
+                return $this->recreateWritingRequestsColumn($customer->fresh());
+            }
+
+            if ((bool) ($existing['closed'] ?? false)) {
+                try {
+                    $this->unarchiveList($storedId);
+                } catch (\Throwable $exception) {
+                    Log::warning('Trello unarchive Writing Requests list failed; recreating column', [
+                        'customer_id' => $customer->id,
+                        'list_id' => $storedId,
+                        'error' => $exception->getMessage(),
+                    ]);
+
+                    return $this->recreateWritingRequestsColumn($customer->fresh());
+                }
+            }
+
+            return $storedId;
+        }
+
+        $id = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
         $customer->update(['trello_writing_requests_list_id' => $id]);
 
         return $id;
@@ -553,9 +641,11 @@ class TrelloService
     /**
      * @return array<int, array<string,mixed>>
      */
-    public function getBoardLists(string $boardId): array
+    public function getBoardLists(string $boardId, string $filter = 'all'): array
     {
-        return $this->request('get', "/boards/{$boardId}/lists");
+        return $this->request('get', "/boards/{$boardId}/lists", [
+            'filter' => $filter,
+        ]);
     }
 
     /**
@@ -873,22 +963,59 @@ class TrelloService
             }
 
             if (Str::lower(trim((string) ($list['name'] ?? ''))) === $target && isset($list['id'])) {
-                return (string) $list['id'];
+                $id = (string) $list['id'];
+
+                if ((bool) ($list['closed'] ?? false)) {
+                    try {
+                        $this->unarchiveList($id);
+                    } catch (\Throwable $exception) {
+                        Log::warning('Trello unarchive writing list by name failed', [
+                            'list_id' => $id,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+
+                return $id;
             }
         }
 
-        $first = $lists[0] ?? null;
+        foreach ($lists as $list) {
+            if (! is_array($list) || (bool) ($list['closed'] ?? false)) {
+                continue;
+            }
 
-        if (is_array($first) && isset($first['id'])) {
-            return (string) $first['id'];
+            if (isset($list['id'])) {
+                return (string) $list['id'];
+            }
         }
 
         $list = $this->request('post', '/lists', [
             'name' => $this->writingRequestsListName,
             'idBoard' => $boardId,
+            'pos' => 'top',
         ]);
 
         return (string) $list['id'];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $lists
+     * @return array<string, mixed>|null
+     */
+    private function findListInBoardListsById(array $lists, string $listId): ?array
+    {
+        foreach ($lists as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+
+            if ((string) ($list['id'] ?? '') === $listId) {
+                return $list;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -904,13 +1031,28 @@ class TrelloService
             }
 
             if (Str::lower(trim((string) ($list['name'] ?? ''))) === $needle && isset($list['id'])) {
-                return (string) $list['id'];
+                $id = (string) $list['id'];
+
+                if ((bool) ($list['closed'] ?? false)) {
+                    try {
+                        $this->unarchiveList($id);
+                    } catch (\Throwable $exception) {
+                        Log::warning('Trello unarchive list by name failed', [
+                            'list_id' => $id,
+                            'name' => $listName,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+
+                return $id;
             }
         }
 
         $created = $this->request('post', '/lists', [
             'name' => $listName,
             'idBoard' => $boardId,
+            'pos' => 'bottom',
         ]);
 
         return (string) $created['id'];
