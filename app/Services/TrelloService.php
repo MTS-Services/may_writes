@@ -23,6 +23,12 @@ class TrelloService
 
     public string $boardNameSuffix;
 
+    public string $writingRequestsListName;
+
+    public string $inProgressListName;
+
+    public string $completedListName;
+
     public string $baseUrl = 'https://api.trello.com/1';
 
     public PendingRequest $client;
@@ -35,11 +41,104 @@ class TrelloService
         $this->workspaceId = (string) config('services.trello.workspace_id');
         $this->allowBillableGuest = (bool) config('services.trello.allow_billable_guest', false);
         $this->boardNameSuffix = (string) config('services.trello.board_name_suffix', 'Writing Board');
+        $this->writingRequestsListName = (string) config('services.trello.writing_requests_list_name', 'Writing Requests');
+        $this->inProgressListName = (string) config('services.trello.in_progress_list_name', 'In Progress');
+        $this->completedListName = (string) config('services.trello.completed_list_name', 'Completed');
         $this->client = Http::baseUrl($this->baseUrl)->acceptJson()->timeout(20)->connectTimeout(10);
     }
 
     /**
-     * @return array{board_id: string, board_url: string, member_id: ?string, webhook_id: ?string, reused_board: bool}
+     * PUT the board name to match the customer's current plan display (idempotent).
+     */
+    public function syncBoardDisplayName(Customer $customer): void
+    {
+        if (! filled($customer->trello_board_id) || $customer->trello_onboarded_at === null) {
+            return;
+        }
+
+        $customer->loadMissing('plan');
+        $boardId = (string) $customer->trello_board_id;
+        $name = $this->boardDisplayName($customer);
+
+        try {
+            $this->request('put', "/boards/{$boardId}", ['name' => $name]);
+        } catch (\Throwable $exception) {
+            Log::warning('Trello board display name sync failed', [
+                'customer_id' => $customer->id,
+                'board_id' => $boardId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Ensure Writing Requests, In Progress, and Completed lists exist; return their ids.
+     *
+     * @return array{writing_requests_list_id: string, in_progress_list_id: string, completed_list_id: string}
+     */
+    public function ensureKanbanLists(string $boardId): array
+    {
+        $lists = $this->getBoardLists($boardId);
+        $writingRequestsListId = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
+        $inProgressListId = $this->findOrCreateListByName($lists, $boardId, $this->inProgressListName);
+        $completedListId = $this->findOrCreateListByName($lists, $boardId, $this->completedListName);
+
+        return [
+            'writing_requests_list_id' => $writingRequestsListId,
+            'in_progress_list_id' => $inProgressListId,
+            'completed_list_id' => $completedListId,
+        ];
+    }
+
+    /**
+     * Resolve the Writing Requests list id from the board, persist on the customer when missing, or null.
+     */
+    public function resolveAndPersistWritingRequestsList(Customer $customer): ?string
+    {
+        if (filled($customer->trello_writing_requests_list_id)) {
+            return (string) $customer->trello_writing_requests_list_id;
+        }
+
+        if (! filled($customer->trello_board_id)) {
+            return null;
+        }
+
+        $boardId = (string) $customer->trello_board_id;
+        $lists = $this->getBoardLists($boardId);
+        $id = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
+
+        $customer->update(['trello_writing_requests_list_id' => $id]);
+
+        return $id;
+    }
+
+    /**
+     * Recreate the welcome sentinel card after deletion; returns the new card id.
+     */
+    public function recreateWelcomeSentinel(Customer $customer): string
+    {
+        if (! filled($customer->trello_board_id)) {
+            throw new \RuntimeException('Cannot recreate welcome card: customer has no Trello board.');
+        }
+
+        $customer->loadMissing('plan');
+        $listId = $this->resolveAndPersistWritingRequestsList($customer);
+
+        if (! filled($listId)) {
+            throw new \RuntimeException('Cannot recreate welcome card: Writing Requests list not found.');
+        }
+
+        return $this->postWelcomeCard(
+            (string) $customer->trello_board_id,
+            $customer,
+            isReuse: false,
+            isSentinelRestore: true,
+            writingListId: $listId,
+        );
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string, member_id: ?string, webhook_id: ?string, reused_board: bool, writing_requests_list_id: string, in_progress_list_id: string, completed_list_id: string, welcome_card_id: ?string}
      */
     public function onboardCustomer(Customer $customer, bool $isRecoveryAttempt = false): array
     {
@@ -91,17 +190,32 @@ class TrelloService
             $customer->trello_webhook_id,
         );
 
+        $listIds = $this->ensureKanbanLists($boardId);
+        $welcomeCardId = null;
+
         if (! $hadBoardBeforeResolution) {
             if ($reusedBoard) {
-                $cardId = $this->postWelcomeCard($boardId, $customer, true);
+                $welcomeCardId = $this->postWelcomeCard(
+                    $boardId,
+                    $customer,
+                    isReuse: true,
+                    isSentinelRestore: false,
+                    writingListId: $listIds['writing_requests_list_id'],
+                );
                 $username = $member['username'] ?? null;
                 $mention = filled($username) ? '@'.$username.' ' : '';
                 $this->notifyMemberOnBoard(
-                    $cardId,
+                    $welcomeCardId,
                     "{$mention}Welcome back to MayWrites! Your writing board is ready — add new requests as cards here.",
                 );
             } elseif (! $isResume) {
-                $this->postWelcomeCard($boardId, $customer, false);
+                $welcomeCardId = $this->postWelcomeCard(
+                    $boardId,
+                    $customer,
+                    isReuse: false,
+                    isSentinelRestore: false,
+                    writingListId: $listIds['writing_requests_list_id'],
+                );
             }
         }
 
@@ -111,6 +225,10 @@ class TrelloService
             'member_id' => $member['id'] ?? null,
             'webhook_id' => $webhookId,
             'reused_board' => $reusedBoard,
+            'writing_requests_list_id' => $listIds['writing_requests_list_id'],
+            'in_progress_list_id' => $listIds['in_progress_list_id'],
+            'completed_list_id' => $listIds['completed_list_id'],
+            'welcome_card_id' => $welcomeCardId,
         ];
     }
 
@@ -356,18 +474,32 @@ class TrelloService
         return isset($webhook['id']) ? (string) $webhook['id'] : null;
     }
 
-    public function postWelcomeCard(string $boardId, Customer $customer, bool $isReuse): string
-    {
-        $firstList = $this->resolveFirstListForWelcomeCard($boardId);
+    public function postWelcomeCard(
+        string $boardId,
+        Customer $customer,
+        bool $isReuse,
+        bool $isSentinelRestore = false,
+        ?string $writingListId = null,
+    ): string {
+        if (filled($writingListId)) {
+            $idList = (string) $writingListId;
+        } else {
+            $firstList = $this->resolveFirstListForWelcomeCard($boardId);
+            $idList = (string) $firstList['id'];
+        }
 
         $name = $isReuse
             ? '👋 Welcome back to MayWrites'
             : '👋 Welcome to MayWrites — Start Here!';
 
+        $desc = $isSentinelRestore
+            ? $this->welcomeCardSentinelDescription($customer)
+            : $this->welcomeCardDescription($customer);
+
         $card = $this->request('post', '/cards', [
-            'idList' => $firstList['id'],
+            'idList' => $idList,
             'name' => $name,
-            'desc' => $this->welcomeCardDescription($customer),
+            'desc' => $desc,
         ]);
 
         return (string) $card['id'];
@@ -729,6 +861,62 @@ class TrelloService
     }
 
     /**
+     * @param  array<int, array<string, mixed>>  $lists
+     */
+    private function resolveWritingRequestsListIdFromLists(array $lists, string $boardId): string
+    {
+        $target = Str::lower(trim($this->writingRequestsListName));
+
+        foreach ($lists as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+
+            if (Str::lower(trim((string) ($list['name'] ?? ''))) === $target && isset($list['id'])) {
+                return (string) $list['id'];
+            }
+        }
+
+        $first = $lists[0] ?? null;
+
+        if (is_array($first) && isset($first['id'])) {
+            return (string) $first['id'];
+        }
+
+        $list = $this->request('post', '/lists', [
+            'name' => $this->writingRequestsListName,
+            'idBoard' => $boardId,
+        ]);
+
+        return (string) $list['id'];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $lists
+     */
+    private function findOrCreateListByName(array $lists, string $boardId, string $listName): string
+    {
+        $needle = Str::lower(trim($listName));
+
+        foreach ($lists as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+
+            if (Str::lower(trim((string) ($list['name'] ?? ''))) === $needle && isset($list['id'])) {
+                return (string) $list['id'];
+            }
+        }
+
+        $created = $this->request('post', '/lists', [
+            'name' => $listName,
+            'idBoard' => $boardId,
+        ]);
+
+        return (string) $created['id'];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function resolveFirstListForWelcomeCard(string $boardId): array
@@ -748,7 +936,7 @@ class TrelloService
         }
 
         $list = $this->request('post', '/lists', [
-            'name' => 'Writing Requests',
+            'name' => $this->writingRequestsListName,
             'idBoard' => $boardId,
         ]);
 
@@ -837,6 +1025,11 @@ class TrelloService
     private function welcomeCardDescription(Customer $customer): string
     {
         return "Hi {$customer->name}! To submit a writing request, create a new card in this list with:\n\n**Title**: What type of content you need\n**Description**: Details, tone, target audience, keywords, word count\n\nWe'll deliver your draft and move the card to 'In Progress', then 'Done' when complete.\n\nQuestions? Email hello@maywrites.co";
+    }
+
+    private function welcomeCardSentinelDescription(Customer $customer): string
+    {
+        return $this->welcomeCardDescription($customer)."\n\n**Please do not delete this card.** It anchors MayWrites automation for this board.";
     }
 
     private function isBillableGuestError(\RuntimeException $exception): bool

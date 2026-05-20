@@ -662,3 +662,140 @@ test('retry trello onboarding command refuses when already onboarded', function 
 
     Queue::assertNothingPushed();
 });
+
+test('checkout session completed syncs trello board name when customer already onboarded', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_rename_checkout')) {
+            return Http::response(['id' => 'board_rename_checkout'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected'], 500);
+    });
+
+    config([
+        'services.trello.api_key' => 'k',
+        'services.trello.api_token' => 't',
+        'billing.trello.provision_on_checkout' => true,
+    ]);
+
+    Queue::fake();
+
+    $plan = Plan::query()->create([
+        'name' => 'Growth',
+        'slug' => 'sync-co-plan',
+        'stripe_price_id' => 'price_sync_co',
+        'price' => 1299,
+        'active_requests' => 5,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 1,
+    ]);
+
+    Customer::query()->create([
+        'name' => 'Sync Co',
+        'email' => 'sync-co@example.com',
+        'stripe_id' => 'cus_sync_co',
+        'status' => CustomerStatus::Active,
+        'plan_id' => $plan->id,
+        'trello_board_id' => 'board_rename_checkout',
+        'trello_onboarded_at' => now()->subDay(),
+    ]);
+
+    Mockery::mock('alias:'.StripeSubscription::class)
+        ->shouldReceive('retrieve')
+        ->once()
+        ->with('sub_sync_co')
+        ->andReturn((object) [
+            'id' => 'sub_sync_co',
+            'status' => 'active',
+            'trial_end' => null,
+        ]);
+
+    postStripeWebhook($this, 'evt_checkout_sync_board', 'checkout.session.completed', [
+        'id' => 'cs_sync_co',
+        'customer' => 'cus_sync_co',
+        'subscription' => 'sub_sync_co',
+        'metadata' => [
+            'plan_id' => (string) $plan->id,
+        ],
+        'customer_details' => [
+            'email' => 'sync-co@example.com',
+            'name' => 'Sync Co',
+        ],
+    ])->assertOk();
+
+    Http::assertSent(fn ($request) => $request->method() === 'PUT'
+        && str_contains($request->url(), 'boards/board_rename_checkout'));
+});
+
+test('subscription updated with plan change syncs trello board name when onboarded', function () {
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_rename_sub')) {
+            return Http::response(['id' => 'board_rename_sub'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected'], 500);
+    });
+
+    config([
+        'services.trello.api_key' => 'k',
+        'services.trello.api_token' => 't',
+    ]);
+
+    Queue::fake();
+
+    $planPro = Plan::query()->create([
+        'name' => 'Pro',
+        'slug' => 'sub-sync-pro',
+        'stripe_price_id' => 'price_sub_sync_pro',
+        'price' => 899,
+        'active_requests' => 2,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 1,
+    ]);
+
+    $planGrowth = Plan::query()->create([
+        'name' => 'Growth',
+        'slug' => 'sub-sync-growth',
+        'stripe_price_id' => 'price_sub_sync_growth',
+        'price' => 1299,
+        'active_requests' => 5,
+        'features' => ['Feature'],
+        'is_featured' => true,
+        'is_active' => true,
+        'sort_order' => 2,
+    ]);
+
+    Customer::query()->create([
+        'name' => 'Upgrade Co',
+        'email' => 'upgrade-co@example.com',
+        'stripe_id' => 'cus_upgrade_co',
+        'status' => CustomerStatus::Active,
+        'plan_id' => $planPro->id,
+        'trello_board_id' => 'board_rename_sub',
+        'trello_onboarded_at' => now()->subWeek(),
+    ]);
+
+    postStripeWebhook($this, 'evt_sub_plan_change', 'customer.subscription.updated', [
+        'id' => 'sub_upgrade_co',
+        'customer' => 'cus_upgrade_co',
+        'status' => 'active',
+        'cancel_at_period_end' => false,
+        'current_period_end' => now()->addMonth()->timestamp,
+        'items' => [
+            'data' => [
+                ['price' => ['id' => 'price_sub_sync_growth']],
+            ],
+        ],
+    ])->assertOk();
+
+    Http::assertSent(fn ($request) => $request->method() === 'PUT'
+        && str_contains($request->url(), 'boards/board_rename_sub'));
+});

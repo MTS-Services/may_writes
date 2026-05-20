@@ -4,17 +4,16 @@ namespace App\Http\Controllers;
 
 use App\Enums\CustomerStatus;
 use App\Enums\TrelloOnboardingStatus;
-use App\Enums\TrelloTaskStatus;
 use App\Jobs\OffboardCustomerJob;
 use App\Jobs\OnboardCustomerJob;
-use App\Jobs\ProcessTrelloTaskJob;
 use App\Models\Customer;
 use App\Models\Plan;
-use App\Models\TrelloTask;
 use App\Models\WebhookLog;
 use App\Services\BillingEventRecorder;
 use App\Services\CustomerTrelloOffboarding;
 use App\Services\CustomerTrelloProvisioning;
+use App\Services\TrelloService;
+use App\Services\TrelloWebhookActionHandler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -29,6 +28,8 @@ class WebhookController extends Controller
         private CustomerTrelloProvisioning $trelloProvisioning,
         private CustomerTrelloOffboarding $trelloOffboarding,
         private BillingEventRecorder $billingEventRecorder,
+        private TrelloService $trelloService,
+        private TrelloWebhookActionHandler $trelloWebhookActionHandler,
     ) {}
 
     public function handleStripe(Request $request): JsonResponse
@@ -90,38 +91,7 @@ class WebhookController extends Controller
             'card_id' => data_get($payload, 'action.data.card.id'),
         ]);
 
-        if (data_get($payload, 'action.type') !== 'createCard') {
-            $log->update(['status' => 'processed', 'processed_at' => now()]);
-
-            return response()->json(['status' => 'ignored']);
-        }
-
-        $boardId = (string) data_get($payload, 'action.data.board.id');
-        $cardId = (string) data_get($payload, 'action.data.card.id');
-
-        $customer = Customer::query()->where('trello_board_id', $boardId)->first();
-
-        if (! $customer || $cardId === '') {
-            $log->update(['status' => 'failed', 'error_message' => 'Unknown board or card.', 'processed_at' => now()]);
-
-            return response()->json(['status' => 'ignored']);
-        }
-
-        $trelloTask = TrelloTask::create([
-            'customer_id' => $customer->id,
-            'trello_card_id' => $cardId,
-            'trello_board_id' => $boardId,
-            'title' => (string) data_get($payload, 'action.data.card.name'),
-            'description' => data_get($payload, 'action.data.card.desc'),
-            'raw_payload' => $payload,
-            'status' => TrelloTaskStatus::Received,
-        ]);
-
-        ProcessTrelloTaskJob::dispatch($trelloTask)->onQueue('default');
-
-        $log->update(['status' => 'processed', 'processed_at' => now()]);
-
-        return response()->json(['status' => 'processed']);
+        return $this->trelloWebhookActionHandler->handle($payload, $log);
     }
 
     private function handleCheckoutCompleted(object $session, WebhookLog $log): JsonResponse
@@ -177,6 +147,10 @@ class WebhookController extends Controller
         }
 
         $customer->refresh();
+
+        if (filled($customer->trello_board_id) && $customer->trello_onboarded_at !== null) {
+            $this->trelloService->syncBoardDisplayName($customer);
+        }
 
         $this->billingEventRecorder->recordFromWebhook($log, $customer);
 
@@ -237,6 +211,8 @@ class WebhookController extends Controller
         $customer = Customer::query()->where('stripe_id', (string) data_get($subscription, 'customer'))->first();
 
         if ($customer) {
+            $previousPlanId = $customer->plan_id;
+
             $updates = array_merge(
                 $this->subscriptionSyncAttributes($subscription),
                 $this->trialEndsAtFromSubscription($subscription),
@@ -247,6 +223,16 @@ class WebhookController extends Controller
             }
 
             $customer->update($updates);
+            $customer->refresh();
+
+            if (
+                filled($customer->trello_board_id)
+                && $customer->trello_onboarded_at !== null
+                && $plan !== null
+                && (int) $previousPlanId !== (int) $customer->plan_id
+            ) {
+                $this->trelloService->syncBoardDisplayName($customer);
+            }
 
             $previousStatus = data_get($event, 'data.previous_attributes.status');
 
