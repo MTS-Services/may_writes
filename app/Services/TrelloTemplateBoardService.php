@@ -16,9 +16,9 @@ class TrelloTemplateBoardService
 
     public function syncBoardAppearance(string $boardId): void
     {
-        $backgroundId = (string) config('trello_template.background_id');
+        $backgroundId = app(TrelloSettings::class)->backgroundId();
 
-        if ($backgroundId === '') {
+        if (! filled($backgroundId)) {
             return;
         }
 
@@ -83,13 +83,25 @@ class TrelloTemplateBoardService
     }
 
     /**
+     * Left-to-right list order: requests → in_progress → draft_review → revisions → delivered.
+     *
+     * @return list<string>
+     */
+    public static function listOrderKeys(): array
+    {
+        return ['requests', 'in_progress', 'draft_review', 'revisions', 'delivered'];
+    }
+
+    /**
      * @param  array<string, string>  $listIdsByKey
      */
     public function applyTemplateListOrder(array $listIdsByKey): void
     {
-        $sequence = ['delivered', 'revisions', 'draft_review', 'in_progress', 'requests'];
+        $sequence = self::listOrderKeys();
 
         try {
+            $position = 16384;
+
             foreach ($sequence as $key) {
                 $listId = $listIdsByKey[$key] ?? null;
 
@@ -98,8 +110,10 @@ class TrelloTemplateBoardService
                 }
 
                 $this->trello()->putList((string) $listId, [
-                    'pos' => $key === 'requests' ? 'top' : 'bottom',
+                    'pos' => $position,
                 ]);
+
+                $position += 16384;
             }
         } catch (\Throwable $exception) {
             Log::warning('Trello template list ordering failed', [

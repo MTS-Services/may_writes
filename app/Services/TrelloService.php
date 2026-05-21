@@ -16,8 +16,6 @@ class TrelloService
 
     public string $apiToken;
 
-    public string $templateBoardId;
-
     public string $workspaceId;
 
     public bool $allowBillableGuest;
@@ -32,7 +30,6 @@ class TrelloService
     {
         $this->apiKey = (string) config('services.trello.api_key');
         $this->apiToken = (string) config('services.trello.api_token');
-        $this->templateBoardId = (string) config('services.trello.template_board_id');
         $this->workspaceId = (string) config('services.trello.workspace_id');
         $this->allowBillableGuest = (bool) config('services.trello.allow_billable_guest', false);
         $this->boardNameSuffix = (string) config('services.trello.board_name_suffix', 'Writing Board');
@@ -616,9 +613,24 @@ class TrelloService
         return $this->request('get', "/cards/{$cardId}");
     }
 
+    public function templateBoardExists(string $boardId): bool
+    {
+        return $this->boardExistsAndOpen($boardId);
+    }
+
+    private function trelloSettings(): TrelloSettings
+    {
+        return app(TrelloSettings::class);
+    }
+
+    private function resolvedTemplateBoardId(): ?string
+    {
+        return $this->trelloSettings()->templateBoardId();
+    }
+
     private function shouldCopyFromTemplateBoard(): bool
     {
-        return filled($this->templateBoardId);
+        return filled($this->resolvedTemplateBoardId());
     }
 
     /**
@@ -628,6 +640,29 @@ class TrelloService
     {
         $customer->loadMissing('plan');
 
+        $copyFromTemplate = $this->shouldCopyFromTemplateBoard();
+
+        try {
+            return $this->postCreateBoard($customer, $copyFromTemplate);
+        } catch (\RuntimeException $exception) {
+            if (! $copyFromTemplate || ! $this->isInvalidTemplateBoardSourceError($exception)) {
+                throw $exception;
+            }
+
+            Log::warning('Trello template board copy failed; falling back to config-only board create', [
+                'template_board_id' => $this->resolvedTemplateBoardId(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return $this->postCreateBoard($customer, copyFromTemplate: false);
+        }
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string}
+     */
+    private function postCreateBoard(Customer $customer, bool $copyFromTemplate): array
+    {
         $params = [
             'name' => $this->boardDisplayName($customer),
             'defaultLists' => false,
@@ -636,14 +671,14 @@ class TrelloService
             'prefs_selfJoin' => false,
         ];
 
-        if ($this->shouldCopyFromTemplateBoard()) {
-            $params['idBoardSource'] = $this->templateBoardId;
+        if ($copyFromTemplate) {
+            $params['idBoardSource'] = (string) $this->resolvedTemplateBoardId();
             $params['keepFromSource'] = 'cards';
         }
 
-        $backgroundId = (string) config('trello_template.background_id');
+        $backgroundId = $this->trelloSettings()->backgroundId();
 
-        if ($backgroundId !== '') {
+        if (filled($backgroundId)) {
             $params['prefs_background'] = $backgroundId;
         }
 
@@ -653,6 +688,20 @@ class TrelloService
             'board_id' => (string) $board['id'],
             'board_url' => (string) $board['shortUrl'],
         ];
+    }
+
+    private function isInvalidTemplateBoardSourceError(\RuntimeException $exception): bool
+    {
+        $message = Str::lower($exception->getMessage());
+
+        return Str::contains($message, [
+            'idboardsource',
+            'not found',
+            'invalid',
+            '404',
+            'does not exist',
+            'no board',
+        ]);
     }
 
     /**

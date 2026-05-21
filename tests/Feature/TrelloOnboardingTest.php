@@ -7,7 +7,10 @@ use App\Jobs\OnboardCustomerJob;
 use App\Mail\WelcomeMail;
 use App\Models\Customer;
 use App\Models\Plan;
+use App\Models\TrelloSetting;
 use App\Services\TrelloService;
+use App\Services\TrelloSettings;
+use App\Services\TrelloTemplateBoardService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
@@ -1241,7 +1244,11 @@ test('lookup mode creates board from config only when template board id is not s
 });
 
 test('lookup mode copies from template board when template board id is set', function () {
-    config(['services.trello.template_board_id' => 'template_board']);
+    TrelloSetting::query()->create([
+        'template_board_id' => 'template_board',
+        'background_id' => null,
+    ]);
+    app(TrelloSettings::class)->clearCache();
 
     Http::fake(function ($request) {
         $templateResponse = trelloTemplateStructureHttpResponse($request);
@@ -1301,6 +1308,106 @@ test('lookup mode copies from template board when template board id is set', fun
 
         return ($data['idBoardSource'] ?? null) === 'template_board'
             && ($data['keepFromSource'] ?? null) === 'cards';
+    });
+});
+
+test('lookup mode falls back to config-only when template board copy fails', function () {
+    TrelloSetting::query()->create([
+        'template_board_id' => 'deleted_board',
+        'background_id' => null,
+    ]);
+    app(TrelloSettings::class)->clearCache();
+
+    $boardCreateAttempts = 0;
+
+    Http::fake(function ($request) use (&$boardCreateAttempts) {
+        $url = $request->url();
+        $method = $request->method();
+
+        if ($method === 'GET' && str_contains($url, '/boards/board_new/lists')) {
+            return Http::response([], 200);
+        }
+
+        if ($method === 'GET' && str_contains($url, '/boards/board_new/cards')) {
+            return Http::response([], 200);
+        }
+
+        if ($method === 'GET' && str_contains($url, '/boards/board_new/labels')) {
+            return Http::response([], 200);
+        }
+
+        if ($method === 'POST' && str_ends_with(parse_url($url, PHP_URL_PATH) ?: '', '/lists')) {
+            $name = (string) data_get($request->data(), 'name', 'list');
+            $listKey = array_search($name, config('trello_template.lists'), true);
+
+            return Http::response([
+                'id' => $listKey ? 'list_'.$listKey : 'list_'.md5($name),
+                'name' => $name,
+            ], 200);
+        }
+
+        $templateResponse = trelloTemplateStructureHttpResponse($request);
+
+        if ($templateResponse !== null) {
+            return $templateResponse;
+        }
+
+        if (str_contains($url, '/search/members')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/organizations/org_workspace/boards')) {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'POST' && preg_match('#/boards$#', parse_url($url, PHP_URL_PATH) ?? '')) {
+            $boardCreateAttempts++;
+            $data = $request->data();
+
+            if (array_key_exists('idBoardSource', $data)) {
+                return Http::response('invalid idBoardSource: board not found', 404);
+            }
+
+            return Http::response([
+                'id' => 'board_new',
+                'shortUrl' => 'https://trello.com/b/board_new',
+            ], 200);
+        }
+
+        if (str_contains($url, '/boards/board_new/members') && $request->method() === 'GET') {
+            return Http::response([], 200);
+        }
+
+        if ($request->method() === 'PUT' && str_contains($url, '/boards/board_new/members')) {
+            return Http::response(['id' => 'member_1', 'username' => 'fallbackuser'], 200);
+        }
+
+        if (str_contains($url, '/tokens/test_token/webhooks')) {
+            return Http::response([], 200);
+        }
+
+        if (str_contains($url, '/webhooks') && $request->method() === 'POST') {
+            return Http::response(['id' => 'hook_1'], 200);
+        }
+
+        return Http::response(['error' => 'unexpected '.$url], 500);
+    });
+
+    $result = app(TrelloService::class)->onboardCustomer(Customer::query()->create([
+        'name' => 'Fallback',
+        'email' => 'fallback@example.com',
+        'status' => CustomerStatus::Active,
+    ]));
+
+    expect($result['board_id'])->toBe('board_new')
+        ->and($boardCreateAttempts)->toBe(2);
+
+    Http::assertSent(function ($request) {
+        if ($request->method() !== 'POST' || ! preg_match('#/boards$#', parse_url($request->url(), PHP_URL_PATH) ?? '')) {
+            return false;
+        }
+
+        return ! array_key_exists('idBoardSource', $request->data());
     });
 });
 
@@ -1468,4 +1575,28 @@ test('checkout clears trello offboard fields on re-subscribe', function () {
         ->and($customer->cancelled_at)->toBeNull();
 
     Queue::assertPushed(OnboardCustomerJob::class);
+});
+
+test('applyTemplateListOrder assigns ascending positions requests through delivered', function () {
+    $positions = [];
+
+    Http::fake(function ($request) use (&$positions) {
+        if ($request->method() === 'PUT' && str_contains($request->url(), '/lists/')) {
+            $positions[] = $request->data()['pos'] ?? null;
+
+            return Http::response(['id' => 'list_ok'], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    app(TrelloTemplateBoardService::class)->applyTemplateListOrder([
+        'requests' => 'list_requests',
+        'in_progress' => 'list_in_progress',
+        'draft_review' => 'list_draft_review',
+        'revisions' => 'list_revisions',
+        'delivered' => 'list_delivered',
+    ]);
+
+    expect($positions)->toBe([16384, 32768, 49152, 65536, 81920]);
 });

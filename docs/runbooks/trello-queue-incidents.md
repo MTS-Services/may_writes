@@ -10,7 +10,7 @@
 
 1. **Stripe webhooks** — Dashboard → Developers → Events: confirm `checkout.session.completed` (and `invoice.paid` if provisioning is deferred) reached your endpoint with HTTP 2xx.
 2. **Queue worker** — Ensure a worker is running the `default` queue in the same environment as the app (`php artisan queue:work` or Horizon).
-3. **Trello configuration** — `TRELLO_API_KEY`, `TRELLO_API_TOKEN`, `TRELLO_WORKSPACE_ID` (organization id, not board id). `TRELLO_TEMPLATE_BOARD_ID` is optional (leave empty in production).
+3. **Trello configuration** — `TRELLO_API_KEY`, `TRELLO_API_TOKEN`, `TRELLO_WORKSPACE_ID` (organization id, not board id). Template board and background IDs are managed in **Admin → Trello** (`/admin/trello`); env vars are legacy fallbacks only.
 4. **Customer row** — `customers.trello_onboarding_status`: `pending` (in progress), `completed` (success), `failed` (all retries exhausted). Read `trello_onboarding_last_error` for the last error text.
 
 ## Recovery
@@ -48,11 +48,13 @@ When a customer already has a Trello board (`trello_onboarded_at` set), **Stripe
 
 ## Template board layout (5 lists + instruction cards)
 
-**Default (no template board id):** onboarding creates an empty workspace board, then provisions five lists, six instruction cards, and list order from `config/trello_template.php` via the Trello API. No dependency on a design-time template board.
+**Default (no template board id in DB):** onboarding creates an empty workspace board, then provisions five lists, six instruction cards, and list order from `config/trello_template.php` via the Trello API. No dependency on a design-time template board.
 
-**Optional:** set `TRELLO_TEMPLATE_BOARD_ID` to copy lists, labels, and cards from that board at create time (`keepFromSource=cards`); structure ensure still reconciles names and order afterward.
+**Optional copy:** set template board ID in `/admin/trello` to copy lists, labels, and cards at create time (`keepFromSource=cards`). If the ID is wrong or the board was deleted, onboarding **logs a warning** and **falls back** to config-only create (no failed job solely for a stale template id).
 
-**Background:** set `TRELLO_BOARD_BACKGROUND_ID` for best-effort coffee-cup (or other) background on create and sync; if unset or invalid, Trello’s default background is used and onboarding continues (warning logged).
+**Background:** set board background ID in `/admin/trello` for best-effort apply on create and sync; if unset or invalid, Trello’s default background is used and onboarding continues (warning logged).
+
+**Admin validation:** saving a non-empty template board ID checks `GET /boards/{id}`; invalid IDs are rejected in the admin form before persisting.
 
 Expected list order (left to right): REQUESTS (QUEUE) → IN PROGRESS → DRAFT REVIEW → REVISIONS → DELIVERED.
 

@@ -4,6 +4,7 @@ use App\Http\Controllers\Admin\AdminCustomerController;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminFileController;
 use App\Http\Controllers\Admin\AdminProfileController;
+use App\Http\Controllers\Admin\AdminTrelloSettingsController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\HomeController;
 use App\Http\Controllers\WebhookController;
@@ -32,6 +33,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin'])->group(fun
     Route::get('/customers/{customer}', [AdminCustomerController::class, 'show'])->name('customers.show');
     Route::get('/files', [AdminFileController::class, 'index'])->name('files');
     Route::get('/files/{task}/download', [AdminFileController::class, 'download'])->name('files.download');
+    Route::get('/trello', [AdminTrelloSettingsController::class, 'edit'])->name('trello.edit');
+    Route::patch('/trello', [AdminTrelloSettingsController::class, 'update'])->name('trello.update');
     Route::get('/settings', [AdminProfileController::class, 'edit'])->name('settings');
     Route::patch('/settings', [AdminProfileController::class, 'update'])->name('settings.update');
     Route::put('/settings/password', [AdminProfileController::class, 'updatePassword'])->name('settings.password');

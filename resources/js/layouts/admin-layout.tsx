@@ -1,10 +1,11 @@
 import { Link, usePage } from '@inertiajs/react';
-import { FileText, LayoutDashboard, Settings, Users } from 'lucide-react';
+import { FileText, LayoutDashboard, LayoutGrid, Settings, Users } from 'lucide-react';
 
 const navItems = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/customers', label: 'Customers', icon: Users },
   { href: '/admin/files', label: 'Files', icon: FileText },
+  { href: '/admin/trello', label: 'Trello', icon: LayoutGrid },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];
 
