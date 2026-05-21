@@ -98,6 +98,18 @@ function trelloDefaultKanbanListFixtures(): array
 }
 
 /**
+ * @return array<string, mixed>
+ */
+function trelloTemplateWelcomeCardFixture(): array
+{
+    return [
+        'id' => 'card_welcome',
+        'idList' => 'list_requests',
+        'name' => (string) config('trello_template.welcome_card.name'),
+    ];
+}
+
+/**
  * @return array<mixed>|null
  */
 function trelloTemplateStructureHttpResponse(Request $request): ?array
@@ -125,7 +137,27 @@ function trelloTemplateStructureHttpResponse(Request $request): ?array
     }
 
     if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/cards') && ! str_contains($url, '/actions')) {
-        return trelloTemplateInstructionCardFixtures();
+        return array_merge(
+            trelloTemplateInstructionCardFixtures(),
+            [trelloTemplateWelcomeCardFixture()],
+        );
+    }
+
+    if ($method === 'GET' && preg_match('#/cards/([^/]+)$#', parse_url($url, PHP_URL_PATH) ?: '', $cardMatches) && ! str_contains($url, '/checklists')) {
+        return [
+            'id' => $cardMatches[1],
+            'name' => 'Test Card',
+            'desc' => 'one two three four five',
+            'checklists' => [],
+        ];
+    }
+
+    if ($method === 'GET' && str_contains($url, '/cards/') && str_contains($url, '/checklists')) {
+        return [];
+    }
+
+    if ($method === 'PUT' && preg_match('#/cards/[^/]+$#', parse_url($url, PHP_URL_PATH) ?: '')) {
+        return ['id' => 'card_ok'];
     }
 
     if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/labels')) {
@@ -144,8 +176,19 @@ function trelloTemplateStructureHttpResponse(Request $request): ?array
         return ['id' => 'list_created'];
     }
 
-    if ($method === 'POST' && str_contains($url, '/cards') && ! str_contains($url, '/idLabels')) {
+    if ($method === 'POST' && str_contains($url, '/cards') && ! str_contains($url, '/idLabels') && ! str_contains($url, '/actions')) {
+        $body = $request->data();
+        $name = (string) ($body['name'] ?? '');
+
+        if (str_starts_with($name, (string) config('trello_template.welcome_card_name_prefix'))) {
+            return ['id' => 'card_welcome'];
+        }
+
         return ['id' => 'card_created'];
+    }
+
+    if ($method === 'POST' && str_contains($url, '/actions/comments')) {
+        return ['id' => 'comment_ok'];
     }
 
     if ($method === 'POST' && str_contains($url, '/idLabels')) {

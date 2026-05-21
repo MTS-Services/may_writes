@@ -181,7 +181,7 @@ class TrelloService
 
         $customer->refresh();
         $layout = $this->ensureTemplateBoardStructure($customer);
-        $welcomeCardId = $layout->instructionCardIds['requests_instructions'] ?? null;
+        $welcomeCardId = $layout->welcomeCardId;
 
         if ($reusedBoard && filled($welcomeCardId)) {
             $username = $member['username'] ?? null;
@@ -610,7 +610,29 @@ class TrelloService
      */
     public function getCardDetails(string $cardId): array
     {
-        return $this->request('get', "/cards/{$cardId}");
+        return $this->request('get', "/cards/{$cardId}", [
+            'checklists' => 'all',
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function putCard(string $cardId, array $params): array
+    {
+        return $this->request('put', "/cards/{$cardId}", $params);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function getCardChecklists(string $cardId): array
+    {
+        $checklists = $this->request('get', "/cards/{$cardId}/checklists", [
+            'checkItems' => 'all',
+        ]);
+
+        return is_array($checklists) ? $checklists : [];
     }
 
     public function templateBoardExists(string $boardId): bool

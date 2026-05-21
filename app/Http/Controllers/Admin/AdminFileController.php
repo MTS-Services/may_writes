@@ -5,31 +5,28 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\TrelloTask;
 use App\Services\DocumentService;
-use Inertia\Inertia;
-use Inertia\Response;
+use Illuminate\Http\RedirectResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AdminFileController extends Controller
 {
-    public function index(): Response
+    public function download(TrelloTask $task): StreamedResponse|RedirectResponse
     {
-        return Inertia::render('admin/files/index', [
-            'tasks' => TrelloTask::query()
-                ->whereNotNull('document_path')
-                ->with('customer')
-                ->latest('processed_at')
-                ->paginate(20),
-        ]);
-    }
+        $version = $task->latestVersion;
 
-    public function download(TrelloTask $task): StreamedResponse
-    {
+        if ($version === null) {
+            abort(404, 'No document version found for this task.');
+        }
+
         $disk = DocumentService::documentsDisk();
 
-        if (! $task->document_path || ! $disk->exists($task->document_path)) {
+        if (! $version->document_path || ! $disk->exists($version->document_path)) {
             abort(404, 'File not found');
         }
 
-        return $disk->download($task->document_path, $task->document_filename ?? basename($task->document_path));
+        return $disk->download(
+            $version->document_path,
+            $version->document_filename ?? basename($version->document_path),
+        );
     }
 }

@@ -53,7 +53,7 @@ test('onboard customer job runs trello before welcome mail', function () {
                 'revisions_list_id' => 'list_revisions',
                 'delivered_list_id' => 'list_delivered',
                 'instruction_card_ids' => ['requests_instructions' => 'card_requests_instructions'],
-                'welcome_card_id' => 'card_requests_instructions',
+                'welcome_card_id' => 'card_welcome',
             ]);
     });
 

@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\TrelloTask;
+use App\Models\TrelloTaskVersion;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -30,7 +31,7 @@ class AdminDashboardController extends Controller
             'totalCustomers' => Customer::count(),
             'activeCustomers' => Customer::where('status', CustomerStatus::Active)->count(),
             'cancelledCustomers' => Customer::where('status', CustomerStatus::Cancelled)->count(),
-            'totalFiles' => TrelloTask::whereNotNull('document_path')->count(),
+            'totalFiles' => TrelloTaskVersion::query()->whereNotNull('document_path')->count(),
             'totalTasks' => TrelloTask::count(),
             'recentCustomers' => Customer::with('plan')->latest()->take(5)->get(),
             'recentTasks' => TrelloTask::with('customer')->latest()->take(5)->get(),

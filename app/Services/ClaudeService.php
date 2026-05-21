@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\TrelloTask;
+use App\Models\TrelloTaskVersion;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -22,22 +24,22 @@ class ClaudeService
     public function __construct()
     {
         $this->apiKey = (string) config('services.anthropic.api_key');
-        $this->model = (string) config('services.anthropic.model', 'claude-opus-4-5');
+        $this->model = (string) config('services.anthropic.model', 'claude-opus-4-7');
     }
 
-    public function summarizeTask(TrelloTask $task): string
+    /**
+     * @return array<string, string>
+     */
+    public function summarizeVersion(TrelloTask $task, TrelloTaskVersion $version, string $aiContext): array
     {
-        $systemPrompt = 'You are an expert writing project manager. A client has submitted a writing request via their project management board. Analyze the request and produce a clear, structured work brief for the writer to follow. Be specific, actionable, and professional.';
-
+        $systemPrompt = $this->systemPrompt();
         $userMessage = "Client name: {$task->customer->name}\n"
-            ."Plan: {$task->customer->plan?->name}\n"
-            ."Card title: {$task->title}\n"
-            .'Card description: '.($task->description ?: 'No additional description provided.')
-            ."\n\nPlease provide a structured work brief that includes:\n"
-            ."1. **Content Type**\n2. **Objective**\n3. **Target Audience**\n4. **Key Points to Cover**\n5. **Tone & Style**\n6. **Suggested Word Count**\n7. **SEO Notes**\n8. **Writer Notes**";
+            .'Plan: '.($task->customer->plan?->name ?? 'N/A')."\n"
+            ."Version: {$version->version_number}\n\n"
+            ."Request content:\n{$aiContext}";
 
         $response = Http::baseUrl($this->baseUrl)
-            ->timeout(45)
+            ->timeout(60)
             ->connectTimeout(10)
             ->withHeaders([
                 'x-api-key' => $this->apiKey,
@@ -46,7 +48,7 @@ class ClaudeService
             ])
             ->post('/messages', [
                 'model' => $this->model,
-                'max_tokens' => 1500,
+                'max_tokens' => 3000,
                 'system' => $systemPrompt,
                 'messages' => [[
                     'role' => 'user',
@@ -66,7 +68,96 @@ class ClaudeService
             ]);
         }
 
-        return (string) data_get($response->json(), 'content.0.text', '');
+        $raw = (string) data_get($response->json(), 'content.0.text', '');
+
+        return $this->parseBriefResponse($raw);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function parseBriefResponse(string $raw): array
+    {
+        $json = $this->extractJson($raw);
+
+        if ($json !== null) {
+            return $this->normalizeBrief($json);
+        }
+
+        return [
+            'title' => 'Writing Brief',
+            'description_summary' => $raw,
+            'content_type' => '',
+            'goal_objective' => '',
+            'target_audience' => '',
+            'tone_style' => '',
+            'length_words' => '',
+            'cta_recommendations' => '',
+            'references_examples' => '',
+            'additional_requirements' => '',
+            'writer_notes' => '',
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function extractJson(string $raw): ?array
+    {
+        $trimmed = trim($raw);
+
+        if (str_starts_with($trimmed, '```')) {
+            $trimmed = preg_replace('/^```(?:json)?\s*/i', '', $trimmed) ?? $trimmed;
+            $trimmed = preg_replace('/\s*```$/', '', $trimmed) ?? $trimmed;
+        }
+
+        $decoded = json_decode($trimmed, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, string>
+     */
+    private function normalizeBrief(array $data): array
+    {
+        $keys = [
+            'title',
+            'description_summary',
+            'content_type',
+            'goal_objective',
+            'target_audience',
+            'tone_style',
+            'length_words',
+            'cta_recommendations',
+            'references_examples',
+            'additional_requirements',
+            'writer_notes',
+        ];
+
+        $brief = [];
+
+        foreach ($keys as $key) {
+            $brief[$key] = trim((string) ($data[$key] ?? ''));
+        }
+
+        if ($brief['title'] === '') {
+            $brief['title'] = 'Writing Brief';
+        }
+
+        return $brief;
+    }
+
+    private function systemPrompt(): string
+    {
+        $path = resource_path('prompts/writing-brief-system.md');
+
+        if (File::exists($path)) {
+            return trim(File::get($path));
+        }
+
+        return 'You are an expert writing project manager. Return JSON only.';
     }
 
     /**

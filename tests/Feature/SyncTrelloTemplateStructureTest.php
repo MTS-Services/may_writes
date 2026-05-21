@@ -48,7 +48,10 @@ test('ensureTemplateBoardStructure recreates missing list instead of failing syn
         }
 
         if ($method === 'GET' && str_contains($url, '/boards/board_sync/cards')) {
-            return Http::response(trelloTemplateInstructionCardFixtures(), 200);
+            return Http::response(array_merge(
+                trelloTemplateInstructionCardFixtures(),
+                [trelloTemplateWelcomeCardFixture()],
+            ), 200);
         }
 
         if ($method === 'GET' && str_contains($url, '/boards/board_sync/labels')) {
@@ -77,6 +80,12 @@ test('ensureTemplateBoardStructure recreates missing list instead of failing syn
 
         if ($method === 'POST' && str_contains($url, '/idLabels')) {
             return Http::response([], 200);
+        }
+
+        $templateResponse = trelloTemplateStructureHttpResponse($request);
+
+        if ($templateResponse !== null) {
+            return Http::response($templateResponse, 200);
         }
 
         return Http::response(['error' => 'unexpected '.$url], 500);

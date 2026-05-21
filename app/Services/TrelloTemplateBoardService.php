@@ -48,7 +48,7 @@ class TrelloTemplateBoardService
             );
         }
 
-        $listConfig = config('trello_template.lists', []);
+        $listConfig = $this->templateListsConfig();
         $lists = $this->trello()->tryGetBoardLists($boardId);
         $listIds = [];
 
@@ -62,11 +62,7 @@ class TrelloTemplateBoardService
         $cards = $this->trello()->tryGetBoardCards($boardId);
         $instructionCardIds = [];
 
-        foreach (config('trello_template.instruction_cards', []) as $slug => $definition) {
-            if (! is_array($definition)) {
-                continue;
-            }
-
+        foreach ($this->templateInstructionCardsConfig() as $slug => $definition) {
             $listKey = (string) ($definition['list_key'] ?? '');
             $listId = $listIds[$listKey] ?? null;
 
@@ -84,7 +80,14 @@ class TrelloTemplateBoardService
             );
         }
 
-        $layout = new TemplateBoardLayout($listIds, $instructionCardIds);
+        $welcomeCardId = $this->resolveOrCreateWelcomeCard(
+            $customer,
+            $boardId,
+            (string) ($listIds['requests'] ?? ''),
+            $cards,
+        );
+
+        $layout = new TemplateBoardLayout($listIds, $instructionCardIds, $welcomeCardId);
         $customer->update($layout->toCustomerAttributes());
 
         return $layout;
@@ -211,13 +214,7 @@ class TrelloTemplateBoardService
         $instructionIds = $customer->trello_instruction_card_ids ?? [];
         $instructionIds[$slug] = $cardId;
 
-        $updates = ['trello_instruction_card_ids' => $instructionIds];
-
-        if ($slug === 'requests_instructions') {
-            $updates['trello_welcome_card_id'] = $cardId;
-        }
-
-        $customer->update($updates);
+        $customer->update(['trello_instruction_card_ids' => $instructionIds]);
 
         return $cardId;
     }
@@ -258,8 +255,8 @@ class TrelloTemplateBoardService
 
         if ($listName !== null) {
             $needle = Str::lower(trim($listName));
-            foreach (config('trello_template.lists', []) as $templateName) {
-                if (Str::lower(trim((string) $templateName)) === $needle) {
+            foreach ($this->templateListsConfig() as $templateName) {
+                if (Str::lower(trim($templateName)) === $needle) {
                     return true;
                 }
             }
@@ -284,11 +281,97 @@ class TrelloTemplateBoardService
             return $this->slugForInstructionCardName($cardName);
         }
 
+        return null;
+    }
+
+    public function isWelcomeCard(Customer $customer, string $cardId, ?string $cardName = null): bool
+    {
         if (filled($customer->trello_welcome_card_id) && $cardId === $customer->trello_welcome_card_id) {
-            return 'requests_instructions';
+            return true;
         }
 
-        return null;
+        if ($cardName !== null && $this->isWelcomeCardName($cardName)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function isWelcomeCardName(string $name): bool
+    {
+        return Str::startsWith(trim($name), (string) config('trello_template.welcome_card_name_prefix'));
+    }
+
+    public function recreateWelcomeCard(Customer $customer): string
+    {
+        $boardId = (string) $customer->trello_board_id;
+        $listId = $customer->trello_writing_requests_list_id;
+
+        if (! filled($listId)) {
+            $layout = $this->ensureTemplateBoardStructure($customer->fresh());
+
+            return (string) $layout->welcomeCardId;
+        }
+
+        $cardId = $this->trello()->postWelcomeCard(
+            $boardId,
+            $customer->fresh(),
+            isReuse: false,
+            writingListId: (string) $listId,
+        );
+
+        $customer->update(['trello_welcome_card_id' => $cardId]);
+
+        return $cardId;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $cards
+     */
+    private function resolveOrCreateWelcomeCard(
+        Customer $customer,
+        string $boardId,
+        string $requestsListId,
+        array $cards,
+    ): string {
+        $welcomeName = (string) config('trello_template.welcome_card.name', '');
+
+        if (filled($customer->trello_welcome_card_id)) {
+            foreach ($cards as $card) {
+                if (! is_array($card)) {
+                    continue;
+                }
+
+                if ((string) ($card['id'] ?? '') === $customer->trello_welcome_card_id) {
+                    return $customer->trello_welcome_card_id;
+                }
+            }
+        }
+
+        foreach ($cards as $card) {
+            if (! is_array($card)) {
+                continue;
+            }
+
+            if (
+                (string) ($card['idList'] ?? '') === $requestsListId
+                && $this->isWelcomeCardName((string) ($card['name'] ?? ''))
+                && isset($card['id'])
+            ) {
+                return (string) $card['id'];
+            }
+        }
+
+        if (! filled($requestsListId)) {
+            throw new \RuntimeException('Cannot create welcome card: requests list missing.');
+        }
+
+        return $this->trello()->postWelcomeCard(
+            $boardId,
+            $customer,
+            isReuse: false,
+            writingListId: $requestsListId,
+        );
     }
 
     public function isInstructionCardName(string $name): bool
@@ -547,11 +630,7 @@ class TrelloTemplateBoardService
 
     private function slugForInstructionCardName(string $cardName): ?string
     {
-        foreach (config('trello_template.instruction_cards', []) as $slug => $definition) {
-            if (! is_array($definition)) {
-                continue;
-            }
-
+        foreach ($this->templateInstructionCardsConfig() as $slug => $definition) {
             if (trim((string) ($definition['name'] ?? '')) === trim($cardName)) {
                 return (string) $slug;
             }
@@ -587,8 +666,8 @@ class TrelloTemplateBoardService
 
         $needle = Str::lower(trim($listName));
 
-        foreach (config('trello_template.lists', []) as $key => $name) {
-            if (Str::lower(trim((string) $name)) === $needle) {
+        foreach ($this->templateListsConfig() as $key => $name) {
+            if (Str::lower(trim($name)) === $needle) {
                 return (string) $key;
             }
         }
@@ -625,5 +704,29 @@ class TrelloTemplateBoardService
         }
 
         return null;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function templateListsConfig(): array
+    {
+        $lists = config('trello_template.lists');
+
+        return is_array($lists) ? $lists : [];
+    }
+
+    /**
+     * @return array<string, array<string, mixed>>
+     */
+    private function templateInstructionCardsConfig(): array
+    {
+        $cards = config('trello_template.instruction_cards');
+
+        if (! is_array($cards)) {
+            return [];
+        }
+
+        return array_filter($cards, is_array(...));
     }
 }

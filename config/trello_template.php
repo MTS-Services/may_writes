@@ -8,6 +8,33 @@ return [
 
     'example_card_name_prefix' => 'EXAMPLE',
 
+    'welcome_card_name_prefix' => '👋 Welcome to MayWrites',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Client welcome card (separate from instruction sentinels)
+    |--------------------------------------------------------------------------
+    */
+    'welcome_card' => [
+        'list_key' => 'requests',
+        'name' => '👋 Welcome to MayWrites — Start Here!',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Workflow status ↔ template list keys
+    |--------------------------------------------------------------------------
+    */
+    'workflow_status_by_list_key' => [
+        'requests' => 'initialized',
+        'in_progress' => 'in_progress',
+        'draft_review' => 'draft',
+        'revisions' => 'revision',
+        'delivered' => 'complete',
+    ],
+
+    'default_workflow_status' => 'other',
+
     /*
     |--------------------------------------------------------------------------
     | Template lists (left-to-right order)

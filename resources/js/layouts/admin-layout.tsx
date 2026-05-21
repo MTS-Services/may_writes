@@ -4,7 +4,7 @@ import { FileText, LayoutDashboard, LayoutGrid, Settings, Users } from 'lucide-r
 const navItems = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/admin/customers', label: 'Customers', icon: Users },
-  { href: '/admin/files', label: 'Files', icon: FileText },
+  { href: '/admin/writing-requests', label: 'Writing requests', icon: FileText },
   { href: '/admin/trello', label: 'Trello', icon: LayoutGrid },
   { href: '/admin/settings', label: 'Settings', icon: Settings },
 ];
