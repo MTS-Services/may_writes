@@ -23,6 +23,7 @@ class PlansSeeder extends Seeder
                 'is_active' => true,
                 'sort_order' => 1,
                 'features' => [
+                    'Ideal for individuals, creators, and small businesses that need consistent short-form content like LinkedIn posts, emails, captions, and simple blog articles.',
                     'Maximum of 4,000 words per request',
                     'Unlimited total requests',
                     '24-72 hr turnaround',
@@ -44,6 +45,7 @@ class PlansSeeder extends Seeder
                 'is_active' => true,
                 'sort_order' => 2,
                 'features' => [
+                    'Perfect for growing brands and professionals that need consistent, high-quality content with stronger storytelling, strategy, and faster turnaround.',
                     'Maximum 10,000 words per request',
                     'Unlimited total requests',
                     '24-48 hr turnaround',
@@ -66,11 +68,11 @@ class PlansSeeder extends Seeder
                 'is_active' => true,
                 'sort_order' => 3,
                 'features' => [
+                    'Built for brands with higher content demands that need long-form content, ongoing campaigns, advanced strategy, and priority delivery.',
                     'Unlimited words per request',
                     'Unlimited total requests',
-                    'Same-day turnaround',
+                    'Priority turnaround',
                     'Unlimited revisions',
-                    'Dedicated Slack channel',
                     'All content types + strategy',
                 ],
             ],

@@ -13,6 +13,7 @@ class DatabaseSeeder extends Seeder
     {
         $this->call([
             PlansSeeder::class,
+            TrelloSettingsSeeder::class,
             AdminUserSeeder::class,
         ]);
     }

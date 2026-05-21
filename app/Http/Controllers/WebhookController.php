@@ -18,6 +18,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Stripe\Stripe;
 use Stripe\Subscription;
 use Stripe\Webhook;
@@ -91,7 +92,23 @@ class WebhookController extends Controller
             'card_id' => data_get($payload, 'action.data.card.id'),
         ]);
 
-        return $this->trelloWebhookActionHandler->handle($payload, $log);
+        try {
+            return $this->trelloWebhookActionHandler->handle($payload, $log);
+        } catch (\Throwable $exception) {
+            Log::error('Trello webhook handler failed', [
+                'webhook_log_id' => $log->id,
+                'error' => $exception->getMessage(),
+                'trace' => $exception->getTraceAsString(),
+            ]);
+
+            $log->update([
+                'status' => 'failed',
+                'error_message' => Str::limit($exception->getMessage(), 500, ''),
+                'processed_at' => now(),
+            ]);
+
+            return response()->json(['status' => 'error'], 200);
+        }
     }
 
     private function handleCheckoutCompleted(object $session, WebhookLog $log): JsonResponse

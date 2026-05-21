@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Data\TemplateBoardLayout;
 use App\Models\Customer;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
@@ -15,19 +16,11 @@ class TrelloService
 
     public string $apiToken;
 
-    public string $templateBoardId;
-
     public string $workspaceId;
 
     public bool $allowBillableGuest;
 
     public string $boardNameSuffix;
-
-    public string $writingRequestsListName;
-
-    public string $inProgressListName;
-
-    public string $completedListName;
 
     public string $baseUrl = 'https://api.trello.com/1';
 
@@ -37,13 +30,9 @@ class TrelloService
     {
         $this->apiKey = (string) config('services.trello.api_key');
         $this->apiToken = (string) config('services.trello.api_token');
-        $this->templateBoardId = (string) config('services.trello.template_board_id');
         $this->workspaceId = (string) config('services.trello.workspace_id');
         $this->allowBillableGuest = (bool) config('services.trello.allow_billable_guest', false);
         $this->boardNameSuffix = (string) config('services.trello.board_name_suffix', 'Writing Board');
-        $this->writingRequestsListName = (string) config('services.trello.writing_requests_list_name', 'Writing Requests');
-        $this->inProgressListName = (string) config('services.trello.in_progress_list_name', 'In Progress');
-        $this->completedListName = (string) config('services.trello.completed_list_name', 'Completed');
         $this->client = Http::baseUrl($this->baseUrl)->acceptJson()->timeout(20)->connectTimeout(10);
     }
 
@@ -71,81 +60,80 @@ class TrelloService
         }
     }
 
+    public function templateBoard(): TrelloTemplateBoardService
+    {
+        return app(TrelloTemplateBoardService::class);
+    }
+
+    public function syncBoardAppearance(string $boardId): void
+    {
+        $this->templateBoard()->syncBoardAppearance($boardId);
+    }
+
+    public function ensureTemplateBoardStructure(Customer $customer): TemplateBoardLayout
+    {
+        return $this->templateBoard()->ensureTemplateBoardStructure($customer);
+    }
+
+    public function restoreProtectedList(Customer $customer, string $listId, string $actionType, ?string $listName = null): TemplateBoardLayout
+    {
+        return $this->templateBoard()->restoreProtectedList($customer, $listId, $actionType, $listName);
+    }
+
+    public function recreateInstructionCard(Customer $customer, string $slug): string
+    {
+        return $this->templateBoard()->recreateInstructionCard($customer, $slug);
+    }
+
     /**
-     * Ensure Writing Requests, In Progress, and Completed lists exist; return their ids.
+     * @deprecated Use ensureTemplateBoardStructure() instead.
      *
      * @return array{writing_requests_list_id: string, in_progress_list_id: string, completed_list_id: string}
      */
     public function ensureKanbanLists(string $boardId): array
     {
-        $lists = $this->getBoardLists($boardId);
-        $writingRequestsListId = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
-        $inProgressListId = $this->findOrCreateListByName($lists, $boardId, $this->inProgressListName);
-        $completedListId = $this->findOrCreateListByName($lists, $boardId, $this->completedListName);
+        $customer = Customer::query()->where('trello_board_id', $boardId)->first();
+
+        if ($customer === null) {
+            throw new \RuntimeException('Cannot ensure kanban lists: no customer for board '.$boardId);
+        }
+
+        $layout = $this->ensureTemplateBoardStructure($customer);
 
         return [
-            'writing_requests_list_id' => $writingRequestsListId,
-            'in_progress_list_id' => $inProgressListId,
-            'completed_list_id' => $completedListId,
+            'writing_requests_list_id' => (string) ($layout->listIds['requests'] ?? ''),
+            'in_progress_list_id' => (string) ($layout->listIds['in_progress'] ?? ''),
+            'completed_list_id' => (string) ($layout->listIds['delivered'] ?? ''),
         ];
     }
 
+    public function unarchiveList(string $listId): void
+    {
+        $this->putList($listId, ['closed' => false]);
+    }
+
     /**
-     * Resolve the Writing Requests list id from the board, persist on the customer when missing, or null.
+     * Resolve the requests (queue) list id; ensures template structure when needed.
      */
     public function resolveAndPersistWritingRequestsList(Customer $customer): ?string
     {
-        if (filled($customer->trello_writing_requests_list_id)) {
-            return (string) $customer->trello_writing_requests_list_id;
-        }
-
-        if (! filled($customer->trello_board_id)) {
-            return null;
-        }
-
-        $boardId = (string) $customer->trello_board_id;
-        $lists = $this->getBoardLists($boardId);
-        $id = $this->resolveWritingRequestsListIdFromLists($lists, $boardId);
-
-        $customer->update(['trello_writing_requests_list_id' => $id]);
-
-        return $id;
+        return $this->templateBoard()->resolveQueueListId($customer);
     }
 
     /**
-     * Recreate the welcome sentinel card after deletion; returns the new card id.
+     * @deprecated Use recreateInstructionCard($customer, 'requests_instructions') instead.
      */
     public function recreateWelcomeSentinel(Customer $customer): string
     {
-        if (! filled($customer->trello_board_id)) {
-            throw new \RuntimeException('Cannot recreate welcome card: customer has no Trello board.');
-        }
-
-        $customer->loadMissing('plan');
-        $listId = $this->resolveAndPersistWritingRequestsList($customer);
-
-        if (! filled($listId)) {
-            throw new \RuntimeException('Cannot recreate welcome card: Writing Requests list not found.');
-        }
-
-        return $this->postWelcomeCard(
-            (string) $customer->trello_board_id,
-            $customer,
-            isReuse: false,
-            isSentinelRestore: true,
-            writingListId: $listId,
-        );
+        return $this->recreateInstructionCard($customer, 'requests_instructions');
     }
 
     /**
-     * @return array{board_id: string, board_url: string, member_id: ?string, webhook_id: ?string, reused_board: bool, writing_requests_list_id: string, in_progress_list_id: string, completed_list_id: string, welcome_card_id: ?string}
+     * @return array{board_id: string, board_url: string, member_id: ?string, webhook_id: ?string, reused_board: bool, writing_requests_list_id: string, in_progress_list_id: string, completed_list_id: string, draft_review_list_id: string, revisions_list_id: string, delivered_list_id: string, instruction_card_ids: array<string, string>, welcome_card_id: ?string}
      */
     public function onboardCustomer(Customer $customer, bool $isRecoveryAttempt = false): array
     {
         $customer->refresh();
-
-        $hadBoardBeforeResolution = filled($customer->trello_board_id)
-            && $customer->trello_onboarded_at === null;
 
         $resolution = $this->allowBillableGuest
             ? $this->resolveBoardForGuestMode($customer)
@@ -154,7 +142,6 @@ class TrelloService
         $boardId = $resolution['board_id'];
         $boardUrl = $resolution['board_url'];
         $reusedBoard = $resolution['reused_board'];
-        $isResume = $resolution['is_resume'];
 
         try {
             $member = $this->inviteMemberToBoard(
@@ -190,33 +177,19 @@ class TrelloService
             $customer->trello_webhook_id,
         );
 
-        $listIds = $this->ensureKanbanLists($boardId);
-        $welcomeCardId = null;
+        $this->syncBoardAppearance($boardId);
 
-        if (! $hadBoardBeforeResolution) {
-            if ($reusedBoard) {
-                $welcomeCardId = $this->postWelcomeCard(
-                    $boardId,
-                    $customer,
-                    isReuse: true,
-                    isSentinelRestore: false,
-                    writingListId: $listIds['writing_requests_list_id'],
-                );
-                $username = $member['username'] ?? null;
-                $mention = filled($username) ? '@'.$username.' ' : '';
-                $this->notifyMemberOnBoard(
-                    $welcomeCardId,
-                    "{$mention}Welcome back to MayWrites! Your writing board is ready — add new requests as cards here.",
-                );
-            } elseif (! $isResume) {
-                $welcomeCardId = $this->postWelcomeCard(
-                    $boardId,
-                    $customer,
-                    isReuse: false,
-                    isSentinelRestore: false,
-                    writingListId: $listIds['writing_requests_list_id'],
-                );
-            }
+        $customer->refresh();
+        $layout = $this->ensureTemplateBoardStructure($customer);
+        $welcomeCardId = $layout->instructionCardIds['requests_instructions'] ?? null;
+
+        if ($reusedBoard && filled($welcomeCardId)) {
+            $username = $member['username'] ?? null;
+            $mention = filled($username) ? '@'.$username.' ' : '';
+            $this->notifyMemberOnBoard(
+                $welcomeCardId,
+                "{$mention}Welcome back to MayWrites! Your writing board is ready — add new requests in the REQUESTS (QUEUE) column.",
+            );
         }
 
         return [
@@ -225,9 +198,13 @@ class TrelloService
             'member_id' => $member['id'] ?? null,
             'webhook_id' => $webhookId,
             'reused_board' => $reusedBoard,
-            'writing_requests_list_id' => $listIds['writing_requests_list_id'],
-            'in_progress_list_id' => $listIds['in_progress_list_id'],
-            'completed_list_id' => $listIds['completed_list_id'],
+            'writing_requests_list_id' => (string) ($layout->listIds['requests'] ?? ''),
+            'in_progress_list_id' => (string) ($layout->listIds['in_progress'] ?? ''),
+            'completed_list_id' => (string) ($layout->listIds['delivered'] ?? ''),
+            'draft_review_list_id' => (string) ($layout->listIds['draft_review'] ?? ''),
+            'revisions_list_id' => (string) ($layout->listIds['revisions'] ?? ''),
+            'delivered_list_id' => (string) ($layout->listIds['delivered'] ?? ''),
+            'instruction_card_ids' => $layout->instructionCardIds,
             'welcome_card_id' => $welcomeCardId,
         ];
     }
@@ -553,9 +530,79 @@ class TrelloService
     /**
      * @return array<int, array<string,mixed>>
      */
-    public function getBoardLists(string $boardId): array
+    public function getBoardLists(string $boardId, string $filter = 'all'): array
     {
-        return $this->request('get', "/boards/{$boardId}/lists");
+        return $this->request('get', "/boards/{$boardId}/lists", [
+            'filter' => $filter,
+        ]);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function getBoardCards(string $boardId): array
+    {
+        $cards = $this->request('get', "/boards/{$boardId}/cards");
+
+        return is_array($cards) ? $cards : [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function getBoardLabels(string $boardId): array
+    {
+        $labels = $this->request('get', "/boards/{$boardId}/labels");
+
+        return is_array($labels) ? $labels : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function putBoard(string $boardId, array $params): array
+    {
+        return $this->request('put', "/boards/{$boardId}", $params);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function putList(string $listId, array $params): array
+    {
+        return $this->request('put', "/lists/{$listId}", $params);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function postList(array $params): array
+    {
+        return $this->request('post', '/lists', $params);
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     * @return array<string, mixed>
+     */
+    public function postCard(array $params): array
+    {
+        return $this->request('post', '/cards', $params);
+    }
+
+    /**
+     * @param  array<int, string>  $labelIds
+     */
+    public function postCardLabels(string $cardId, array $labelIds): void
+    {
+        foreach ($labelIds as $labelId) {
+            $this->request('post', "/cards/{$cardId}/idLabels", [
+                'value' => $labelId,
+            ]);
+        }
     }
 
     /**
@@ -566,6 +613,26 @@ class TrelloService
         return $this->request('get', "/cards/{$cardId}");
     }
 
+    public function templateBoardExists(string $boardId): bool
+    {
+        return $this->boardExistsAndOpen($boardId);
+    }
+
+    private function trelloSettings(): TrelloSettings
+    {
+        return app(TrelloSettings::class);
+    }
+
+    private function resolvedTemplateBoardId(): ?string
+    {
+        return $this->trelloSettings()->templateBoardId();
+    }
+
+    private function shouldCopyFromTemplateBoard(): bool
+    {
+        return filled($this->resolvedTemplateBoardId());
+    }
+
     /**
      * @return array{board_id: string, board_url: string}
      */
@@ -573,19 +640,68 @@ class TrelloService
     {
         $customer->loadMissing('plan');
 
-        $board = $this->request('post', '/boards', [
+        $copyFromTemplate = $this->shouldCopyFromTemplateBoard();
+
+        try {
+            return $this->postCreateBoard($customer, $copyFromTemplate);
+        } catch (\RuntimeException $exception) {
+            if (! $copyFromTemplate || ! $this->isInvalidTemplateBoardSourceError($exception)) {
+                throw $exception;
+            }
+
+            Log::warning('Trello template board copy failed; falling back to config-only board create', [
+                'template_board_id' => $this->resolvedTemplateBoardId(),
+                'error' => $exception->getMessage(),
+            ]);
+
+            return $this->postCreateBoard($customer, copyFromTemplate: false);
+        }
+    }
+
+    /**
+     * @return array{board_id: string, board_url: string}
+     */
+    private function postCreateBoard(Customer $customer, bool $copyFromTemplate): array
+    {
+        $params = [
             'name' => $this->boardDisplayName($customer),
             'defaultLists' => false,
-            'idBoardSource' => $this->templateBoardId,
             'idOrganization' => $this->workspaceId,
             'prefs_permissionLevel' => 'private',
             'prefs_selfJoin' => false,
-        ]);
+        ];
+
+        if ($copyFromTemplate) {
+            $params['idBoardSource'] = (string) $this->resolvedTemplateBoardId();
+            $params['keepFromSource'] = 'cards';
+        }
+
+        $backgroundId = $this->trelloSettings()->backgroundId();
+
+        if (filled($backgroundId)) {
+            $params['prefs_background'] = $backgroundId;
+        }
+
+        $board = $this->request('post', '/boards', $params);
 
         return [
             'board_id' => (string) $board['id'],
             'board_url' => (string) $board['shortUrl'],
         ];
+    }
+
+    private function isInvalidTemplateBoardSourceError(\RuntimeException $exception): bool
+    {
+        $message = Str::lower($exception->getMessage());
+
+        return Str::contains($message, [
+            'idboardsource',
+            'not found',
+            'invalid',
+            '404',
+            'does not exist',
+            'no board',
+        ]);
     }
 
     /**
@@ -865,7 +981,7 @@ class TrelloService
      */
     private function resolveWritingRequestsListIdFromLists(array $lists, string $boardId): string
     {
-        $target = Str::lower(trim($this->writingRequestsListName));
+        $target = Str::lower(trim($this->queueListName()));
 
         foreach ($lists as $list) {
             if (! is_array($list)) {
@@ -873,22 +989,64 @@ class TrelloService
             }
 
             if (Str::lower(trim((string) ($list['name'] ?? ''))) === $target && isset($list['id'])) {
+                $id = (string) $list['id'];
+
+                if ((bool) ($list['closed'] ?? false)) {
+                    try {
+                        $this->unarchiveList($id);
+                    } catch (\Throwable $exception) {
+                        Log::warning('Trello unarchive writing list by name failed', [
+                            'list_id' => $id,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+
+                return $id;
+            }
+        }
+
+        foreach ($lists as $list) {
+            if (! is_array($list) || (bool) ($list['closed'] ?? false)) {
+                continue;
+            }
+
+            if (isset($list['id'])) {
                 return (string) $list['id'];
             }
         }
 
-        $first = $lists[0] ?? null;
-
-        if (is_array($first) && isset($first['id'])) {
-            return (string) $first['id'];
-        }
-
         $list = $this->request('post', '/lists', [
-            'name' => $this->writingRequestsListName,
+            'name' => $this->queueListName(),
             'idBoard' => $boardId,
+            'pos' => 'top',
         ]);
 
         return (string) $list['id'];
+    }
+
+    private function queueListName(): string
+    {
+        return (string) config('trello_template.lists.requests', 'REQUESTS (QUEUE) COLUMN');
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $lists
+     * @return array<string, mixed>|null
+     */
+    private function findListInBoardListsById(array $lists, string $listId): ?array
+    {
+        foreach ($lists as $list) {
+            if (! is_array($list)) {
+                continue;
+            }
+
+            if ((string) ($list['id'] ?? '') === $listId) {
+                return $list;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -904,13 +1062,28 @@ class TrelloService
             }
 
             if (Str::lower(trim((string) ($list['name'] ?? ''))) === $needle && isset($list['id'])) {
-                return (string) $list['id'];
+                $id = (string) $list['id'];
+
+                if ((bool) ($list['closed'] ?? false)) {
+                    try {
+                        $this->unarchiveList($id);
+                    } catch (\Throwable $exception) {
+                        Log::warning('Trello unarchive list by name failed', [
+                            'list_id' => $id,
+                            'name' => $listName,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+
+                return $id;
             }
         }
 
         $created = $this->request('post', '/lists', [
             'name' => $listName,
             'idBoard' => $boardId,
+            'pos' => 'bottom',
         ]);
 
         return (string) $created['id'];
@@ -936,7 +1109,7 @@ class TrelloService
         }
 
         $list = $this->request('post', '/lists', [
-            'name' => $this->writingRequestsListName,
+            'name' => $this->queueListName(),
             'idBoard' => $boardId,
         ]);
 

@@ -47,9 +47,6 @@ return [
         'workspace_id' => env('TRELLO_WORKSPACE_ID'),
         'allow_billable_guest' => env('TRELLO_ALLOW_BILLABLE_GUEST', false),
         'board_name_suffix' => env('TRELLO_BOARD_NAME_SUFFIX', 'Writing Board'),
-        'writing_requests_list_name' => env('TRELLO_WRITING_REQUESTS_LIST_NAME', 'Writing Requests'),
-        'in_progress_list_name' => env('TRELLO_IN_PROGRESS_LIST_NAME', 'In Progress'),
-        'completed_list_name' => env('TRELLO_COMPLETED_LIST_NAME', 'Completed'),
     ],
 
 ];
