@@ -11,12 +11,27 @@ class TrelloSettings
 
     public function record(): TrelloSetting
     {
-        return Cache::remember(self::CACHE_KEY, 60, fn (): TrelloSetting => TrelloSetting::current());
+        return TrelloSetting::current();
+    }
+
+    /**
+     * @return array{template_board_id: ?string, background_id: ?string}
+     */
+    private function cachedValues(): array
+    {
+        return Cache::remember(self::CACHE_KEY, 60, function (): array {
+            $record = TrelloSetting::current();
+
+            return [
+                'template_board_id' => $record->template_board_id,
+                'background_id' => $record->background_id,
+            ];
+        });
     }
 
     public function templateBoardId(): ?string
     {
-        $fromDatabase = $this->record()->template_board_id;
+        $fromDatabase = $this->cachedValues()['template_board_id'];
 
         if (filled($fromDatabase)) {
             return (string) $fromDatabase;
@@ -29,7 +44,7 @@ class TrelloSettings
 
     public function backgroundId(): ?string
     {
-        $fromDatabase = $this->record()->background_id;
+        $fromDatabase = $this->cachedValues()['background_id'];
 
         if (filled($fromDatabase)) {
             return (string) $fromDatabase;
@@ -56,7 +71,7 @@ class TrelloSettings
                 : null,
         ]);
 
-        Cache::forget(self::CACHE_KEY);
+        $this->clearCache();
 
         return $record->fresh();
     }
@@ -71,11 +86,6 @@ class TrelloSettings
      */
     public function toAdminArray(): array
     {
-        $record = $this->record();
-
-        return [
-            'template_board_id' => $record->template_board_id,
-            'background_id' => $record->background_id,
-        ];
+        return $this->cachedValues();
     }
 }
