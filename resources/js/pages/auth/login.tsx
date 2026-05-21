@@ -1,4 +1,4 @@
-import { Form, Head } from '@inertiajs/react';
+import { Form, Head, Link } from '@inertiajs/react';
 import InputError from '@/components/input-error';
 import PasswordInput from '@/components/password-input';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { store } from '@/routes/login';
+import { home } from '@/routes';
 
 type Props = {
   status?: string;
@@ -52,12 +53,12 @@ export default function Login({ status }: Props) {
           <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808008_1px,transparent_1px),linear-gradient(to_bottom,#80808008_1px,transparent_1px)] bg-[size:32px_32px]" />
           
           {/* Header branding */}
-          <div className="relative z-20 flex items-center gap-2 text-lg font-medium">
+          <Link href={home()} className="relative z-20 flex items-center gap-2 text-lg font-medium">
             <span className="h-6 w-6 rounded-md bg-white text-zinc-950 flex items-center justify-center font-bold text-sm">
               M
             </span>
             MayWrites
-          </div>
+          </Link>
 
           {/* Central Section: Embedded & Stylized Dashboard Element */}
           <div className="relative z-20 my-auto flex items-center justify-center pt-8 [perspective:2000px]">

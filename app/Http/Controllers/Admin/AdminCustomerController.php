@@ -18,14 +18,14 @@ class AdminCustomerController extends Controller
     {
         $customers = Customer::query()
             ->with('plan')
-            ->when($request->filled('status'), fn ($query) => $query->where('status', $request->string('status')->toString()))
-            ->when($request->filled('plan_id'), fn ($query) => $query->where('plan_id', $request->integer('plan_id')))
+            ->when($request->filled('status'), fn($query) => $query->where('status', $request->string('status')->toString()))
+            ->when($request->filled('plan_id'), fn($query) => $query->where('plan_id', $request->integer('plan_id')))
             ->when($request->filled('search'), function ($query) use ($request) {
-                $search = '%'.$request->string('search')->toString().'%';
-                $query->where(fn ($nested) => $nested->where('name', 'like', $search)->orWhere('email', 'like', $search));
+                $search = '%' . $request->string('search')->toString() . '%';
+                $query->where(fn($nested) => $nested->where('name', 'like', $search)->orWhere('email', 'like', $search));
             })
             ->latest()
-            ->paginate(15)
+            ->paginate(5)
             ->withQueryString();
 
         return Inertia::render('admin/customers/index', [
@@ -44,12 +44,12 @@ class AdminCustomerController extends Controller
             ->withCount('versions')
             ->with([
                 'latestVersion',
-                'versions' => fn ($query) => $query->reorder('version_number', 'desc'),
+                'versions' => fn($query) => $query->reorder('version_number', 'desc'),
             ])
             ->latest()
             ->paginate(10)
             ->withQueryString()
-            ->through(fn (TrelloTask $task): array => $this->formatTaskForCustomerShow($task));
+            ->through(fn(TrelloTask $task): array => $this->formatTaskForCustomerShow($task));
 
         return Inertia::render('admin/customers/show', [
             'customer' => [
@@ -81,7 +81,7 @@ class AdminCustomerController extends Controller
             'workflow_label' => $task->workflow_status->label(),
             'pipeline_status' => $latestVersion?->pipeline_status->value,
             'versions_count' => (int) $task->versions_count,
-            'versions' => $task->versions->map(fn (TrelloTaskVersion $version): array => [
+            'versions' => $task->versions->map(fn(TrelloTaskVersion $version): array => [
                 'id' => $version->id,
                 'version_number' => $version->version_number,
                 'trigger' => $version->trigger->value,
