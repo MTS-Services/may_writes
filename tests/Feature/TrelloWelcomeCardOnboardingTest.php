@@ -39,4 +39,9 @@ test('ensure template structure stores welcome card separate from instruction ca
         ->and($layout->instructionCardIds['requests_instructions'])->toBe('card_requests_instructions')
         ->and($customer->trello_welcome_card_id)->toBe('card_welcome')
         ->and($customer->trello_welcome_card_id)->not->toBe($customer->trello_instruction_card_ids['requests_instructions']);
+
+    Http::assertSent(fn ($request) => $request->method() === 'PUT'
+        && str_contains($request->url(), '/cards/card_welcome')
+        && ($request->data()['pos'] ?? null) === 'top'
+        && ($request->data()['idList'] ?? null) === 'list_requests');
 });

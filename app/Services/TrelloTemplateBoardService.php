@@ -320,6 +320,8 @@ class TrelloTemplateBoardService
             writingListId: (string) $listId,
         );
 
+        $this->positionWelcomeCardAtTop($cardId, (string) $listId);
+
         $customer->update(['trello_welcome_card_id' => $cardId]);
 
         return $cardId;
@@ -334,8 +336,6 @@ class TrelloTemplateBoardService
         string $requestsListId,
         array $cards,
     ): string {
-        $welcomeName = (string) config('trello_template.welcome_card.name', '');
-
         if (filled($customer->trello_welcome_card_id)) {
             foreach ($cards as $card) {
                 if (! is_array($card)) {
@@ -343,7 +343,10 @@ class TrelloTemplateBoardService
                 }
 
                 if ((string) ($card['id'] ?? '') === $customer->trello_welcome_card_id) {
-                    return $customer->trello_welcome_card_id;
+                    $welcomeCardId = $customer->trello_welcome_card_id;
+                    $this->positionWelcomeCardAtTop($welcomeCardId, $requestsListId);
+
+                    return $welcomeCardId;
                 }
             }
         }
@@ -358,7 +361,10 @@ class TrelloTemplateBoardService
                 && $this->isWelcomeCardName((string) ($card['name'] ?? ''))
                 && isset($card['id'])
             ) {
-                return (string) $card['id'];
+                $welcomeCardId = (string) $card['id'];
+                $this->positionWelcomeCardAtTop($welcomeCardId, $requestsListId);
+
+                return $welcomeCardId;
             }
         }
 
@@ -366,12 +372,36 @@ class TrelloTemplateBoardService
             throw new \RuntimeException('Cannot create welcome card: requests list missing.');
         }
 
-        return $this->trello()->postWelcomeCard(
+        $welcomeCardId = $this->trello()->postWelcomeCard(
             $boardId,
             $customer,
             isReuse: false,
             writingListId: $requestsListId,
         );
+
+        $this->positionWelcomeCardAtTop($welcomeCardId, $requestsListId);
+
+        return $welcomeCardId;
+    }
+
+    private function positionWelcomeCardAtTop(string $welcomeCardId, string $requestsListId): void
+    {
+        if (! filled($requestsListId)) {
+            return;
+        }
+
+        try {
+            $this->trello()->putCard($welcomeCardId, [
+                'pos' => 'top',
+                'idList' => $requestsListId,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Trello welcome card position failed', [
+                'card_id' => $welcomeCardId,
+                'list_id' => $requestsListId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     public function isInstructionCardName(string $name): bool

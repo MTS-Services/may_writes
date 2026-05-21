@@ -477,6 +477,7 @@ class TrelloService
             'idList' => $idList,
             'name' => $name,
             'desc' => $desc,
+            'pos' => 'top',
         ]);
 
         return (string) $card['id'];
