@@ -14,6 +14,7 @@ readonly class TemplateBoardLayout
     public function __construct(
         public array $listIds,
         public array $instructionCardIds,
+        public ?string $welcomeCardId = null,
     ) {}
 
     /**
@@ -21,8 +22,6 @@ readonly class TemplateBoardLayout
      */
     public function toCustomerAttributes(): array
     {
-        $requestsInstructionsId = $this->instructionCardIds['requests_instructions'] ?? null;
-
         return [
             'trello_writing_requests_list_id' => $this->listIds['requests'] ?? null,
             'trello_in_progress_list_id' => $this->listIds['in_progress'] ?? null,
@@ -31,7 +30,7 @@ readonly class TemplateBoardLayout
             'trello_delivered_list_id' => $this->listIds['delivered'] ?? null,
             'trello_completed_list_id' => $this->listIds['delivered'] ?? null,
             'trello_instruction_card_ids' => $this->instructionCardIds,
-            'trello_welcome_card_id' => $requestsInstructionsId,
+            'trello_welcome_card_id' => $this->welcomeCardId,
         ];
     }
 

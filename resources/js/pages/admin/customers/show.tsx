@@ -17,9 +17,12 @@ import { ArrowLeft, CreditCard, Download, Mail, User } from 'lucide-react';
 type Task = {
   id: number;
   title: string;
-  status: string;
+  workflow_status: string;
+  workflow_label: string;
+  pipeline_status?: string | null;
   document_path?: string | null;
   document_filename?: string | null;
+  has_document: boolean;
 };
 
 type Customer = {
@@ -33,7 +36,7 @@ type Customer = {
 };
 
 function statusBadgeVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  const s = status.toLowerCase();
+  const s = (status ?? '').toLowerCase();
   if (s === 'active') {
     return 'default';
   }
@@ -44,9 +47,9 @@ function statusBadgeVariant(status: string): 'default' | 'secondary' | 'destruct
   return 'secondary';
 }
 
-function taskStatusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  const s = status.toLowerCase();
-  if (s === 'summarized' || s === 'received') {
+function pipelineVariant(status: string | null | undefined): 'default' | 'secondary' | 'destructive' | 'outline' {
+  const s = (status ?? '').toLowerCase();
+  if (s === 'summarized') {
     return 'default';
   }
   if (s === 'failed') {
@@ -136,7 +139,8 @@ export default function AdminCustomerShowPage({ customer, tasks }: { customer: C
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="pl-6">Title</TableHead>
                   <TableHead>Document</TableHead>
-                  <TableHead className="pr-6 text-right">Status</TableHead>
+                  <TableHead>Workflow</TableHead>
+                  <TableHead className="pr-6 text-right">Pipeline</TableHead>
                   <TableHead className="w-14 pr-6 text-right">Get</TableHead>
                 </TableRow>
               </TableHeader>
@@ -147,11 +151,18 @@ export default function AdminCustomerShowPage({ customer, tasks }: { customer: C
                     <TableCell className="max-w-48 truncate font-mono text-xs text-muted-foreground">
                       {task.document_filename ?? '—'}
                     </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{task.workflow_label}</Badge>
+                    </TableCell>
                     <TableCell className="text-right">
-                      <Badge variant={taskStatusVariant(task.status)}>{task.status}</Badge>
+                      {task.pipeline_status ? (
+                        <Badge variant={pipelineVariant(task.pipeline_status)}>{task.pipeline_status}</Badge>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell className="pr-6 text-right">
-                      {task.document_path ? (
+                      {task.has_document ? (
                         <Button variant="ghost" size="icon" className="size-9 shrink-0" asChild>
                           <a href={download.url(task.id)} title="Download document" download>
                             <Download className="size-4" />

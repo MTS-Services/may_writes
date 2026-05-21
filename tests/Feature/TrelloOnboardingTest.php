@@ -53,7 +53,7 @@ test('onboard customer job runs trello before welcome mail', function () {
                 'revisions_list_id' => 'list_revisions',
                 'delivered_list_id' => 'list_delivered',
                 'instruction_card_ids' => ['requests_instructions' => 'card_requests_instructions'],
-                'welcome_card_id' => 'card_requests_instructions',
+                'welcome_card_id' => 'card_welcome',
             ]);
     });
 
@@ -1590,7 +1590,7 @@ test('applyTemplateListOrder assigns ascending positions requests through delive
         return Http::response([], 200);
     });
 
-    app(TrelloTemplateBoardService::class)->applyTemplateListOrder([
+    app(TrelloTemplateBoardService::class)->applyTemplateListOrder('board_new', [
         'requests' => 'list_requests',
         'in_progress' => 'list_in_progress',
         'draft_review' => 'list_draft_review',

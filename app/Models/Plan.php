@@ -15,6 +15,7 @@ class Plan extends Model
         'stripe_price_id',
         'price',
         'active_requests',
+        'words_per_request',
         'features',
         'is_featured',
         'is_active',

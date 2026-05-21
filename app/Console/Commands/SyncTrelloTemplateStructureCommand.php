@@ -44,7 +44,13 @@ class SyncTrelloTemplateStructureCommand extends Command
                 $trelloService->ensureTemplateBoardStructure($customer->fresh());
                 $this->info("Synced template structure for customer {$customer->id} ({$customer->email})");
             } catch (\Throwable $exception) {
-                $this->error("Failed for customer {$customer->id}: {$exception->getMessage()}");
+                $message = $exception->getMessage();
+
+                if (str_contains($message, 'not found') && str_contains($message, 'Re-run onboarding')) {
+                    $this->warn("Skipped customer {$customer->id} ({$customer->email}): board missing — run customers:retry-trello-onboarding {$customer->email}");
+                } else {
+                    $this->error("Failed for customer {$customer->id}: {$message}");
+                }
             }
         }
 
