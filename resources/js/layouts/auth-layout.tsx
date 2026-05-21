@@ -9,9 +9,5 @@ export default function AuthLayout({
     description?: string;
     children: React.ReactNode;
 }) {
-    return (
-        <AuthLayoutTemplate title={title} description={description}>
-            {children}
-        </AuthLayoutTemplate>
-    );
+    return <div>{children}</div>;
 }
