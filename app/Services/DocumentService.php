@@ -38,15 +38,19 @@ class DocumentService
         $phpWord->setDefaultFontSize(11);
 
         $section = $phpWord->addSection();
-        $section->addText($brief['title'] ?? 'Writing Brief', ['bold' => true, 'size' => 18, 'color' => '0D0D0B'], ['spaceAfter' => 240]);
-        $section->addText('Client: '.$task->customer->name, ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Plan: '.($task->customer->plan?->name ?? 'N/A'), ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Version: '.$version->version_number, ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Processed: '.now()->format('F j, Y g:i A'), ['size' => 10, 'color' => '7A7870']);
+        $section->addText(
+            $this->xmlSafeText((string) ($brief['title'] ?? 'Writing Brief')),
+            ['bold' => true, 'size' => 18, 'color' => '0D0D0B'],
+            ['spaceAfter' => 240],
+        );
+        $section->addText($this->xmlSafeText('Client: '.$task->customer->name), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Plan: '.($task->customer->plan?->name ?? 'N/A')), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Version: '.$version->version_number), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Processed: '.now()->format('F j, Y g:i A')), ['size' => 10, 'color' => '7A7870']);
 
         if ($version->was_truncated) {
             $section->addText(
-                $version->truncated_notice ?? 'Description was truncated to match plan word limit.',
+                $this->xmlSafeText($version->truncated_notice ?? 'Description was truncated to match plan word limit.'),
                 ['size' => 10, 'color' => 'B45309', 'italic' => true],
                 ['spaceAfter' => 120],
             );
@@ -74,16 +78,16 @@ class DocumentService
                 continue;
             }
 
-            $section->addText($heading, ['bold' => true, 'size' => 12], ['spaceBefore' => 120, 'spaceAfter' => 60]);
-            $section->addText($value, ['size' => 11]);
+            $section->addText($this->xmlSafeText($heading), ['bold' => true, 'size' => 12], ['spaceBefore' => 120, 'spaceAfter' => 60]);
+            $section->addText($this->xmlSafeText($value), ['size' => 11]);
         }
 
         $section->addTextBreak(2);
-        $section->addText('Original Request', ['bold' => true, 'size' => 12]);
-        $section->addText($version->title, ['italic' => true]);
+        $section->addText($this->xmlSafeText('Original Request'), ['bold' => true, 'size' => 12]);
+        $section->addText($this->xmlSafeText($version->title), ['italic' => true]);
 
         if ($version->description) {
-            $section->addText($version->description, ['color' => '7A7870', 'size' => 10]);
+            $section->addText($this->xmlSafeText($version->description), ['color' => '7A7870', 'size' => 10]);
         }
 
         $filename = 'v'.$version->version_number.'_'.date('Y-m-d').'_'.$safeTitle.'.docx';
@@ -99,5 +103,13 @@ class DocumentService
             'filename' => $filename,
             'absolute_path' => $absolutePath,
         ];
+    }
+
+    /**
+     * PhpWord does not escape XML special characters in plain addText(); invalid OOXML breaks Word Online / Google Docs.
+     */
+    private function xmlSafeText(string $text): string
+    {
+        return htmlspecialchars($text, ENT_XML1 | ENT_COMPAT, 'UTF-8');
     }
 }
