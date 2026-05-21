@@ -1590,7 +1590,7 @@ test('applyTemplateListOrder assigns ascending positions requests through delive
         return Http::response([], 200);
     });
 
-    app(TrelloTemplateBoardService::class)->applyTemplateListOrder([
+    app(TrelloTemplateBoardService::class)->applyTemplateListOrder('board_new', [
         'requests' => 'list_requests',
         'in_progress' => 'list_in_progress',
         'draft_review' => 'list_draft_review',

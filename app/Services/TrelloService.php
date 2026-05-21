@@ -618,6 +618,61 @@ class TrelloService
         return $this->boardExistsAndOpen($boardId);
     }
 
+    public function isResourceNotFound(\RuntimeException $exception): bool
+    {
+        return $this->isIgnorableLookupError($exception);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function tryGetBoardLists(string $boardId, string $filter = 'all'): array
+    {
+        $lists = $this->tryRequest('get', "/boards/{$boardId}/lists", [
+            'filter' => $filter,
+        ]);
+
+        return is_array($lists) ? $lists : [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function tryGetBoardCards(string $boardId): array
+    {
+        $cards = $this->tryRequest('get', "/boards/{$boardId}/cards");
+
+        return is_array($cards) ? $cards : [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function tryGetBoardLabels(string $boardId): array
+    {
+        $labels = $this->tryRequest('get', "/boards/{$boardId}/labels");
+
+        return is_array($labels) ? $labels : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $params
+     */
+    public function tryPutList(string $listId, array $params): bool
+    {
+        try {
+            $this->putList($listId, $params);
+
+            return true;
+        } catch (\RuntimeException $exception) {
+            if ($this->isResourceNotFound($exception)) {
+                return false;
+            }
+
+            throw $exception;
+        }
+    }
+
     private function trelloSettings(): TrelloSettings
     {
         return app(TrelloSettings::class);

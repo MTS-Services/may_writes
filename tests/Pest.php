@@ -105,6 +105,21 @@ function trelloTemplateStructureHttpResponse(Request $request): ?array
     $url = $request->url();
     $method = $request->method();
 
+    if (
+        $method === 'GET'
+        && preg_match('#/boards/([^/]+)$#', parse_url($url, PHP_URL_PATH) ?: '', $boardMatches)
+        && ! str_contains($url, '/lists')
+        && ! str_contains($url, '/cards')
+        && ! str_contains($url, '/labels')
+        && ! str_contains($url, '/members')
+    ) {
+        return [
+            'id' => $boardMatches[1],
+            'closed' => false,
+            'shortUrl' => 'https://trello.com/b/'.$boardMatches[1],
+        ];
+    }
+
     if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/lists')) {
         return trelloTemplateListFixtures();
     }

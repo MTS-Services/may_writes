@@ -41,18 +41,25 @@ class TrelloTemplateBoardService
         }
 
         $boardId = (string) $customer->trello_board_id;
+
+        if (! $this->trello()->templateBoardExists($boardId)) {
+            throw new \RuntimeException(
+                "Trello board {$boardId} was not found or is closed. Re-run onboarding for this customer before syncing structure.",
+            );
+        }
+
         $listConfig = config('trello_template.lists', []);
-        $lists = $this->trello()->getBoardLists($boardId);
+        $lists = $this->trello()->tryGetBoardLists($boardId);
         $listIds = [];
 
         foreach ($listConfig as $key => $listName) {
-            $listIds[$key] = $this->findOrCreateListByName($lists, $boardId, (string) $listName);
-            $lists = $this->trello()->getBoardLists($boardId);
+            $listIds[$key] = $this->findOrCreateListByName($lists, $boardId, (string) $listName, (string) $key);
+            $lists = $this->trello()->tryGetBoardLists($boardId);
         }
 
-        $this->applyTemplateListOrder($listIds);
+        $listIds = $this->applyTemplateListOrder($boardId, $listIds);
 
-        $cards = $this->trello()->getBoardCards($boardId);
+        $cards = $this->trello()->tryGetBoardCards($boardId);
         $instructionCardIds = [];
 
         foreach (config('trello_template.instruction_cards', []) as $slug => $definition) {
@@ -73,6 +80,7 @@ class TrelloTemplateBoardService
                 $slug,
                 $definition,
                 $cards,
+                $listKey,
             );
         }
 
@@ -94,33 +102,39 @@ class TrelloTemplateBoardService
 
     /**
      * @param  array<string, string>  $listIdsByKey
+     * @return array<string, string>
      */
-    public function applyTemplateListOrder(array $listIdsByKey): void
+    public function applyTemplateListOrder(string $boardId, array $listIdsByKey): array
     {
         $sequence = self::listOrderKeys();
+        $position = 16384;
 
-        try {
-            $position = 16384;
+        foreach ($sequence as $key) {
+            $listId = $listIdsByKey[$key] ?? null;
 
-            foreach ($sequence as $key) {
-                $listId = $listIdsByKey[$key] ?? null;
+            if (! filled($listId)) {
+                continue;
+            }
 
-                if (! filled($listId)) {
-                    continue;
-                }
+            $listName = (string) config("trello_template.lists.{$key}", '');
 
-                $this->trello()->putList((string) $listId, [
-                    'pos' => $position,
+            if (! $this->trello()->tryPutList((string) $listId, ['pos' => $position])) {
+                Log::warning('Trello list missing during ordering; recreating', [
+                    'board_id' => $boardId,
+                    'list_key' => $key,
+                    'list_id' => $listId,
                 ]);
 
-                $position += 16384;
+                $lists = $this->trello()->tryGetBoardLists($boardId);
+                $listId = $this->findOrCreateListByName($lists, $boardId, $listName, $key);
+                $listIdsByKey[$key] = $listId;
+                $this->trello()->putList($listId, ['pos' => $position]);
             }
-        } catch (\Throwable $exception) {
-            Log::warning('Trello template list ordering failed', [
-                'list_ids' => $listIdsByKey,
-                'error' => $exception->getMessage(),
-            ]);
+
+            $position += 16384;
         }
+
+        return $listIdsByKey;
     }
 
     public function restoreProtectedList(Customer $customer, string $listId, string $actionType, ?string $listName = null): TemplateBoardLayout
@@ -215,7 +229,7 @@ class TrelloTemplateBoardService
         }
 
         if (filled($customer->trello_writing_requests_list_id)) {
-            $lists = $this->trello()->getBoardLists((string) $customer->trello_board_id);
+            $lists = $this->trello()->tryGetBoardLists((string) $customer->trello_board_id);
             $existing = $this->findListInBoardListsById($lists, (string) $customer->trello_writing_requests_list_id);
 
             if ($existing !== null && ! (bool) ($existing['closed'] ?? false)) {
@@ -290,38 +304,116 @@ class TrelloTemplateBoardService
     /**
      * @param  array<int, array<string, mixed>>  $lists
      */
-    private function findOrCreateListByName(array $lists, string $boardId, string $listName): string
+    private function findOrCreateListByName(array $lists, string $boardId, string $listName, string $listKey): string
     {
-        $needle = Str::lower(trim($listName));
+        $match = $this->findListInBoardListsByNames($lists, $this->listNamesForKey($listKey, $listName));
+
+        if ($match !== null && isset($match['id'])) {
+            $id = (string) $match['id'];
+            $resolved = $this->ensureListUsable($id, $boardId, $listName, $listKey);
+
+            if ($resolved !== null) {
+                $this->updateListNameIfNeeded($resolved, $listName);
+
+                return $resolved;
+            }
+        }
+
+        return $this->createListOnBoard($boardId, $listName, $listKey);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function listNamesForKey(string $listKey, string $canonicalName): array
+    {
+        $aliases = config("trello_template.list_aliases.{$listKey}", []);
+
+        if (! is_array($aliases)) {
+            $aliases = [];
+        }
+
+        return array_values(array_unique(array_merge([$canonicalName], $aliases)));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $lists
+     * @param  list<string>  $names
+     * @return array<string, mixed>|null
+     */
+    private function findListInBoardListsByNames(array $lists, array $names): ?array
+    {
+        $needles = array_map(
+            static fn (string $name): string => Str::lower(trim($name)),
+            $names,
+        );
 
         foreach ($lists as $list) {
             if (! is_array($list)) {
                 continue;
             }
 
-            if (Str::lower(trim((string) ($list['name'] ?? ''))) === $needle && isset($list['id'])) {
-                $id = (string) $list['id'];
+            $listName = Str::lower(trim((string) ($list['name'] ?? '')));
 
-                if ((bool) ($list['closed'] ?? false)) {
-                    try {
-                        $this->trello()->unarchiveList($id);
-                    } catch (\Throwable $exception) {
-                        Log::warning('Trello unarchive list by name failed', [
-                            'list_id' => $id,
-                            'name' => $listName,
-                            'error' => $exception->getMessage(),
-                        ]);
-                    }
-                }
-
-                return $id;
+            if (in_array($listName, $needles, true) && isset($list['id'])) {
+                return $list;
             }
         }
 
+        return null;
+    }
+
+    private function ensureListUsable(string $listId, string $boardId, string $listName, string $listKey): ?string
+    {
+        if ($this->trello()->tryPutList($listId, ['closed' => false])) {
+            return $listId;
+        }
+
+        if ((bool) data_get($this->findListInBoardListsById(
+            $this->trello()->tryGetBoardLists($boardId),
+            $listId,
+        ), 'closed', false)) {
+            try {
+                $this->trello()->unarchiveList($listId);
+
+                if ($this->trello()->tryPutList($listId, ['closed' => false])) {
+                    return $listId;
+                }
+            } catch (\Throwable $exception) {
+                Log::warning('Trello unarchive list failed; will recreate', [
+                    'list_id' => $listId,
+                    'list_name' => $listName,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        Log::warning('Trello list id not found; recreating list', [
+            'board_id' => $boardId,
+            'list_key' => $listKey,
+            'list_id' => $listId,
+            'list_name' => $listName,
+        ]);
+
+        return null;
+    }
+
+    private function updateListNameIfNeeded(string $listId, string $expectedName): void
+    {
+        if (! $this->trello()->tryPutList($listId, ['name' => $expectedName])) {
+            Log::warning('Trello list rename skipped; list may be missing', [
+                'list_id' => $listId,
+                'expected_name' => $expectedName,
+            ]);
+        }
+    }
+
+    private function createListOnBoard(string $boardId, string $listName, string $listKey): string
+    {
         $created = $this->trello()->postList([
             'name' => $listName,
             'idBoard' => $boardId,
-            'pos' => 'bottom',
+            'pos' => $listKey === 'requests' ? 'top' : 'bottom',
         ]);
 
         return (string) $created['id'];
@@ -337,6 +429,7 @@ class TrelloTemplateBoardService
         string $slug,
         array $definition,
         array $cards,
+        string $listKey,
     ): string {
         $expectedName = (string) ($definition['name'] ?? '');
 
@@ -354,16 +447,46 @@ class TrelloTemplateBoardService
             }
         }
 
-        $card = $this->trello()->postCard([
-            'idList' => $listId,
-            'name' => $expectedName,
-            'desc' => (string) ($definition['desc'] ?? ''),
-        ]);
+        $listId = $this->resolveListIdForCardCreate($boardId, $listId, $listKey);
+
+        try {
+            $card = $this->trello()->postCard([
+                'idList' => $listId,
+                'name' => $expectedName,
+                'desc' => (string) ($definition['desc'] ?? ''),
+            ]);
+        } catch (\RuntimeException $exception) {
+            if (! $this->trello()->isResourceNotFound($exception)) {
+                throw $exception;
+            }
+
+            $listName = (string) config("trello_template.lists.{$listKey}", '');
+            $lists = $this->trello()->tryGetBoardLists($boardId);
+            $listId = $this->findOrCreateListByName($lists, $boardId, $listName, $listKey);
+
+            $card = $this->trello()->postCard([
+                'idList' => $listId,
+                'name' => $expectedName,
+                'desc' => (string) ($definition['desc'] ?? ''),
+            ]);
+        }
 
         $cardId = (string) $card['id'];
         $this->applyInstructionCardLabels($boardId, $cardId, $definition);
 
         return $cardId;
+    }
+
+    private function resolveListIdForCardCreate(string $boardId, string $listId, string $listKey): string
+    {
+        if ($this->trello()->tryPutList($listId, ['closed' => false])) {
+            return $listId;
+        }
+
+        $listName = (string) config("trello_template.lists.{$listKey}", '');
+        $lists = $this->trello()->tryGetBoardLists($boardId);
+
+        return $this->findOrCreateListByName($lists, $boardId, $listName, $listKey);
     }
 
     /**
@@ -377,7 +500,7 @@ class TrelloTemplateBoardService
             return;
         }
 
-        $labels = $this->trello()->getBoardLabels($boardId);
+        $labels = $this->trello()->tryGetBoardLabels($boardId);
         $ids = [];
 
         foreach ($labelNames as $name) {

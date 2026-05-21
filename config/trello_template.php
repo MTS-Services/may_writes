@@ -23,6 +23,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Legacy list names (pre-template boards) matched when ensuring structure
+    |--------------------------------------------------------------------------
+    */
+    'list_aliases' => [
+        'requests' => ['Writing Requests', 'REQUESTS (QUEUE)'],
+        'in_progress' => ['In Progress'],
+        'draft_review' => ['Draft Review'],
+        'revisions' => ['Revisions'],
+        'delivered' => ['Completed', 'Delivered'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Instruction sentinel cards (protected from delete/archive)
     |--------------------------------------------------------------------------
     */
