@@ -2,8 +2,7 @@
 
 namespace App\Services;
 
-use App\Enums\TrelloTaskStatus;
-use App\Jobs\ProcessTrelloTaskJob;
+use App\Enums\TrelloTaskVersionTrigger;
 use App\Models\Customer;
 use App\Models\TrelloTask;
 use App\Models\WebhookLog;
@@ -16,6 +15,8 @@ class TrelloWebhookActionHandler
     public function __construct(
         private TrelloService $trelloService,
         private TrelloTemplateBoardService $templateBoard,
+        private TrelloWritingRequestService $writingRequests,
+        private WorkflowStatusSyncService $workflowSync,
     ) {}
 
     /**
@@ -27,6 +28,7 @@ class TrelloWebhookActionHandler
 
         return match ($actionType) {
             'createCard' => $this->handleCreateCard($payload, $log),
+            'updateCard' => $this->handleUpdateCard($payload, $log),
             'deleteCard' => $this->handleDeleteCard($payload, $log),
             'archiveList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
             'deleteList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
@@ -48,6 +50,109 @@ class TrelloWebhookActionHandler
         }
 
         return $this->markProcessedAndIgnore($log);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleUpdateCard(array $payload, WebhookLog $log): JsonResponse
+    {
+        $boardId = (string) data_get($payload, 'action.data.board.id');
+        $cardId = (string) data_get($payload, 'action.data.card.id');
+        $cardName = (string) data_get($payload, 'action.data.card.name', '');
+
+        $customer = Customer::query()->where('trello_board_id', $boardId)->first();
+
+        if ($customer === null || $cardId === '') {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        if ($this->shouldIgnoreCard($customer, $cardId, $cardName)) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $listAfterId = (string) (data_get($payload, 'action.data.listAfter.id')
+            ?? data_get($payload, 'action.data.list.id')
+            ?? '');
+        $listBeforeId = (string) (data_get($payload, 'action.data.listBefore.id') ?? '');
+        $oldListId = data_get($payload, 'action.data.old.idList');
+        $listMoved = $oldListId !== null
+            || (filled($listAfterId) && filled($listBeforeId) && $listAfterId !== $listBeforeId);
+
+        if ($listMoved && filled($listAfterId)) {
+            $task = TrelloTask::query()->where('trello_card_id', $cardId)->first();
+
+            if ($task !== null) {
+                $this->workflowSync->syncFromTrelloList($task, $listAfterId);
+            }
+
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'processed']);
+        }
+
+        $oldDesc = data_get($payload, 'action.data.old.desc');
+        $descChanged = array_key_exists('desc', (array) data_get($payload, 'action.data.old', []));
+
+        if (! $descChanged) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $queueListId = $customer->trello_writing_requests_list_id;
+        $currentListId = filled($listAfterId) ? $listAfterId : (string) data_get($payload, 'action.data.card.idList', '');
+
+        if ($queueListId === null || $currentListId !== $queueListId) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $newDescription = (string) data_get($payload, 'action.data.card.desc', '');
+        $task = TrelloTask::query()->where('trello_card_id', $cardId)->first();
+
+        if ($task === null) {
+            $this->writingRequests->createTaskFromWebhook(
+                $customer,
+                $cardId,
+                $boardId,
+                $currentListId,
+                $cardName,
+                $newDescription,
+                $payload,
+                TrelloTaskVersionTrigger::Updated,
+            );
+
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'processed']);
+        }
+
+        if (! $this->writingRequests->shouldProcessDescriptionUpdate($task, $customer, $currentListId, $newDescription)) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $this->writingRequests->createTaskFromWebhook(
+            $customer,
+            $cardId,
+            $boardId,
+            $currentListId,
+            $cardName,
+            $newDescription,
+            $payload,
+            TrelloTaskVersionTrigger::Updated,
+        );
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json(['status' => 'processed']);
     }
 
     /**
@@ -133,29 +238,22 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        if ($this->templateBoard->instructionSlugForCard($customer, $cardId, $cardName) !== null) {
+        if ($this->shouldIgnoreCard($customer, $cardId, $cardName)) {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
         }
 
-        if ($this->templateBoard->isExampleCardName($cardName)) {
-            $log->update(['status' => 'processed', 'processed_at' => now()]);
-
-            return response()->json(['status' => 'ignored']);
-        }
-
-        $trelloTask = TrelloTask::create([
-            'customer_id' => $customer->id,
-            'trello_card_id' => $cardId,
-            'trello_board_id' => $boardId,
-            'title' => $cardName,
-            'description' => data_get($payload, 'action.data.card.desc'),
-            'raw_payload' => $payload,
-            'status' => TrelloTaskStatus::Received,
-        ]);
-
-        ProcessTrelloTaskJob::dispatch($trelloTask)->onQueue('default');
+        $this->writingRequests->createTaskFromWebhook(
+            $customer,
+            $cardId,
+            $boardId,
+            $listId,
+            $cardName,
+            data_get($payload, 'action.data.card.desc'),
+            $payload,
+            TrelloTaskVersionTrigger::Created,
+        );
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
@@ -177,6 +275,29 @@ class TrelloWebhookActionHandler
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
+        }
+
+        if ($this->templateBoard->isWelcomeCard($customer, $cardId, $cardName)) {
+            try {
+                $this->templateBoard->recreateWelcomeCard($customer->fresh());
+            } catch (\Throwable $exception) {
+                Log::warning('Trello welcome card recreate failed', [
+                    'customer_id' => $customer->id,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                $log->update([
+                    'status' => 'failed',
+                    'error_message' => Str::limit($exception->getMessage(), 500, ''),
+                    'processed_at' => now(),
+                ]);
+
+                return response()->json(['status' => 'processed']);
+            }
+
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'processed']);
         }
 
         $slug = $this->templateBoard->instructionSlugForCard($customer, $cardId, $cardName);
@@ -209,6 +330,23 @@ class TrelloWebhookActionHandler
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
         return response()->json(['status' => 'processed']);
+    }
+
+    private function shouldIgnoreCard(Customer $customer, string $cardId, string $cardName): bool
+    {
+        if ($this->templateBoard->isWelcomeCard($customer, $cardId, $cardName)) {
+            return true;
+        }
+
+        if ($this->templateBoard->instructionSlugForCard($customer, $cardId, $cardName) !== null) {
+            return true;
+        }
+
+        if ($this->templateBoard->isExampleCardName($cardName)) {
+            return true;
+        }
+
+        return false;
     }
 
     private function markProcessedAndIgnore(WebhookLog $log): JsonResponse

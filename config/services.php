@@ -37,7 +37,7 @@ return [
 
     'anthropic' => [
         'api_key' => env('ANTHROPIC_API_KEY'),
-        'model' => env('ANTHROPIC_MODEL', 'claude-opus-4-5'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-opus-4-7'),
     ],
 
     'trello' => [

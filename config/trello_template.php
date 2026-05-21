@@ -8,6 +8,33 @@ return [
 
     'example_card_name_prefix' => 'EXAMPLE',
 
+    'welcome_card_name_prefix' => '👋 Welcome to MayWrites',
+
+    /*
+    |--------------------------------------------------------------------------
+    | Client welcome card (separate from instruction sentinels)
+    |--------------------------------------------------------------------------
+    */
+    'welcome_card' => [
+        'list_key' => 'requests',
+        'name' => '👋 Welcome to MayWrites — Start Here!',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Workflow status ↔ template list keys
+    |--------------------------------------------------------------------------
+    */
+    'workflow_status_by_list_key' => [
+        'requests' => 'initialized',
+        'in_progress' => 'in_progress',
+        'draft_review' => 'draft',
+        'revisions' => 'revision',
+        'delivered' => 'complete',
+    ],
+
+    'default_workflow_status' => 'other',
+
     /*
     |--------------------------------------------------------------------------
     | Template lists (left-to-right order)
@@ -19,6 +46,19 @@ return [
         'draft_review' => 'DRAFT REVIEW COLUMN',
         'revisions' => 'REVISIONS COLUMN',
         'delivered' => 'DELIVERED COLUMN',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Legacy list names (pre-template boards) matched when ensuring structure
+    |--------------------------------------------------------------------------
+    */
+    'list_aliases' => [
+        'requests' => ['Writing Requests', 'REQUESTS (QUEUE)'],
+        'in_progress' => ['In Progress'],
+        'draft_review' => ['Draft Review'],
+        'revisions' => ['Revisions'],
+        'delivered' => ['Completed', 'Delivered'],
     ],
 
     /*

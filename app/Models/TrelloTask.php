@@ -2,11 +2,10 @@
 
 namespace App\Models;
 
-use App\Enums\TrelloTaskStatus;
-use Illuminate\Database\Eloquent\Casts\Attribute;
+use App\Enums\WritingWorkflowStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TrelloTask extends Model
 {
@@ -14,23 +13,18 @@ class TrelloTask extends Model
         'customer_id',
         'trello_card_id',
         'trello_board_id',
+        'trello_list_id',
         'title',
         'description',
-        'raw_payload',
-        'status',
-        'ai_summary',
-        'document_path',
-        'document_filename',
-        'processed_at',
-        'failed_reason',
+        'workflow_status',
+        'content_fingerprint',
+        'latest_version_id',
     ];
 
     protected function casts(): array
     {
         return [
-            'raw_payload' => 'array',
-            'status' => TrelloTaskStatus::class,
-            'processed_at' => 'datetime',
+            'workflow_status' => WritingWorkflowStatus::class,
         ];
     }
 
@@ -39,14 +33,20 @@ class TrelloTask extends Model
         return $this->belongsTo(Customer::class);
     }
 
-    protected function documentUrl(): Attribute
+    public function versions(): HasMany
     {
-        return Attribute::get(function (): ?string {
-            if (! $this->document_path) {
-                return null;
-            }
+        return $this->hasMany(TrelloTaskVersion::class)->orderBy('version_number');
+    }
 
-            return Storage::url($this->document_path);
-        });
+    public function latestVersion(): BelongsTo
+    {
+        return $this->belongsTo(TrelloTaskVersion::class, 'latest_version_id');
+    }
+
+    public static function descriptionFingerprint(?string $description): string
+    {
+        $normalized = preg_replace('/\s+/u', ' ', trim((string) $description)) ?? '';
+
+        return hash('sha256', $normalized);
     }
 }

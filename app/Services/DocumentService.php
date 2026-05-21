@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\TrelloTask;
+use App\Models\TrelloTaskVersion;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -20,11 +21,16 @@ class DocumentService
         return Storage::disk((string) config('filesystems.default'));
     }
 
-    public function generateTaskDocument(TrelloTask $task, string $summary): array
+    /**
+     * @param  array<string, string>  $brief
+     * @return array{path: string, filename: string, absolute_path: string}
+     */
+    public function generateVersionDocument(TrelloTask $task, TrelloTaskVersion $version, array $brief): array
     {
         $disk = self::documentsDisk();
         $safeName = Str::slug($task->customer->name);
         $safeTitle = Str::slug($task->title, '_');
+        $cardId = $task->trello_card_id;
 
         $phpWord = new PhpWord;
         $phpWord->getSettings()->setThemeFontLang(new Language(Language::EN_US));
@@ -32,41 +38,62 @@ class DocumentService
         $phpWord->setDefaultFontSize(11);
 
         $section = $phpWord->addSection();
-        $section->addText('Writing Brief — '.$task->title, ['bold' => true, 'size' => 18, 'color' => '0D0D0B'], ['spaceAfter' => 240]);
-        $section->addText('Client: '.$task->customer->name, ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Plan: '.($task->customer->plan?->name ?? 'N/A'), ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Submitted: '.$task->created_at->format('F j, Y'), ['size' => 10, 'color' => '7A7870']);
-        $section->addText('Trello Card ID: '.$task->trello_card_id, ['size' => 10, 'color' => '7A7870']);
+        $section->addText(
+            $this->xmlSafeText((string) ($brief['title'] ?? 'Writing Brief')),
+            ['bold' => true, 'size' => 18, 'color' => '0D0D0B'],
+            ['spaceAfter' => 240],
+        );
+        $section->addText($this->xmlSafeText('Client: '.$task->customer->name), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Plan: '.($task->customer->plan?->name ?? 'N/A')), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Version: '.$version->version_number), ['size' => 10, 'color' => '7A7870']);
+        $section->addText($this->xmlSafeText('Processed: '.now()->format('F j, Y g:i A')), ['size' => 10, 'color' => '7A7870']);
+
+        if ($version->was_truncated) {
+            $section->addText(
+                $this->xmlSafeText($version->truncated_notice ?? 'Description was truncated to match plan word limit.'),
+                ['size' => 10, 'color' => 'B45309', 'italic' => true],
+                ['spaceAfter' => 120],
+            );
+        }
+
         $section->addLine(['weight' => 1, 'color' => 'E6E4DE', 'width' => 400, 'spaceAfter' => 240]);
 
-        foreach (preg_split('/\r\n|\r|\n/', $summary) as $line) {
-            if ($line === '') {
-                $section->addTextBreak(1);
+        $sections = [
+            'Description' => 'description_summary',
+            'Content Type' => 'content_type',
+            'Goal & Objective' => 'goal_objective',
+            'Target Audience' => 'target_audience',
+            'Tone & Style' => 'tone_style',
+            'Length' => 'length_words',
+            'CTA & Recommendations' => 'cta_recommendations',
+            'References & Examples' => 'references_examples',
+            'Additional Requirements' => 'additional_requirements',
+            'Writer Notes' => 'writer_notes',
+        ];
 
+        foreach ($sections as $heading => $key) {
+            $value = trim((string) ($brief[$key] ?? ''));
+
+            if ($value === '') {
                 continue;
             }
 
-            if (str_starts_with(trim($line), '**') && str_ends_with(trim($line), '**')) {
-                $section->addText(trim($line, '*'), ['bold' => true, 'size' => 12]);
-
-                continue;
-            }
-
-            $section->addText($line);
+            $section->addText($this->xmlSafeText($heading), ['bold' => true, 'size' => 12], ['spaceBefore' => 120, 'spaceAfter' => 60]);
+            $section->addText($this->xmlSafeText($value), ['size' => 11]);
         }
 
         $section->addTextBreak(2);
-        $section->addText('Original Request', ['bold' => true, 'size' => 12]);
-        $section->addText($task->title, ['italic' => true]);
+        $section->addText($this->xmlSafeText('Original Request'), ['bold' => true, 'size' => 12]);
+        $section->addText($this->xmlSafeText($version->title), ['italic' => true]);
 
-        if ($task->description) {
-            $section->addText($task->description, ['color' => '7A7870', 'size' => 10]);
+        if ($version->description) {
+            $section->addText($this->xmlSafeText($version->description), ['color' => '7A7870', 'size' => 10]);
         }
 
-        $filename = date('Y-m-d').'_'.$safeTitle.'.docx';
-        $relativePath = 'clients/'.$safeName.'/'.$filename;
+        $filename = 'v'.$version->version_number.'_'.date('Y-m-d').'_'.$safeTitle.'.docx';
+        $relativePath = 'clients/'.$safeName.'/'.$cardId.'/'.$filename;
 
-        $disk->makeDirectory('clients/'.$safeName);
+        $disk->makeDirectory('clients/'.$safeName.'/'.$cardId);
 
         $absolutePath = $disk->path($relativePath);
         IOFactory::createWriter($phpWord, 'Word2007')->save($absolutePath);
@@ -76,5 +103,13 @@ class DocumentService
             'filename' => $filename,
             'absolute_path' => $absolutePath,
         ];
+    }
+
+    /**
+     * PhpWord does not escape XML special characters in plain addText(); invalid OOXML breaks Word Online / Google Docs.
+     */
+    private function xmlSafeText(string $text): string
+    {
+        return htmlspecialchars($text, ENT_XML1 | ENT_COMPAT, 'UTF-8');
     }
 }

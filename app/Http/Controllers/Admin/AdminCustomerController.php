@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Plan;
+use App\Models\TrelloTask;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -34,9 +35,41 @@ class AdminCustomerController extends Controller
 
     public function show(Customer $customer): Response
     {
+        $customer->load('plan');
+
+        $tasks = $customer->trelloTasks()
+            ->with('latestVersion')
+            ->latest()
+            ->take(10)
+            ->get()
+            ->map(function (TrelloTask $task): array {
+                $latestVersion = $task->latestVersion;
+
+                return [
+                    'id' => $task->id,
+                    'title' => $task->title,
+                    'workflow_status' => $task->workflow_status->value,
+                    'workflow_label' => $task->workflow_status->label(),
+                    'pipeline_status' => $latestVersion?->pipeline_status->value,
+                    'document_path' => $latestVersion?->document_path,
+                    'document_filename' => $latestVersion?->document_filename,
+                    'has_document' => filled($latestVersion?->document_path),
+                ];
+            })
+            ->values()
+            ->all();
+
         return Inertia::render('admin/customers/show', [
-            'customer' => $customer->load('plan'),
-            'tasks' => $customer->trelloTasks()->latest()->take(10)->get(),
+            'customer' => [
+                'id' => $customer->id,
+                'name' => $customer->name,
+                'email' => $customer->email,
+                'status' => $customer->status->value,
+                'trello_board_url' => $customer->trello_board_url,
+                'trello_board_id' => $customer->trello_board_id,
+                'plan' => $customer->plan ? ['name' => $customer->plan->name] : null,
+            ],
+            'tasks' => $tasks,
         ]);
     }
 }

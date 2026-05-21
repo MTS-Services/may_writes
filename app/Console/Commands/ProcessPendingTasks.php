@@ -2,29 +2,28 @@
 
 namespace App\Console\Commands;
 
-use App\Enums\TrelloTaskStatus;
+use App\Enums\TrelloTaskPipelineStatus;
 use App\Jobs\ProcessTrelloTaskJob;
-use App\Models\TrelloTask;
-use Illuminate\Console\Attributes\Description;
-use Illuminate\Console\Attributes\Signature;
+use App\Models\TrelloTaskVersion;
 use Illuminate\Console\Command;
 
-#[Signature('tasks:process-pending')]
-#[Description('Dispatch all pending Trello tasks for processing')]
 class ProcessPendingTasks extends Command
 {
-    /**
-     * Execute the console command.
-     */
+    protected $signature = 'trello:process-pending-tasks';
+
+    protected $description = 'Dispatch jobs for queued Trello task versions';
+
     public function handle(): int
     {
-        $tasks = TrelloTask::query()->where('status', TrelloTaskStatus::Received)->get();
+        $versions = TrelloTaskVersion::query()
+            ->where('pipeline_status', TrelloTaskPipelineStatus::Queued)
+            ->get();
 
-        foreach ($tasks as $task) {
-            ProcessTrelloTaskJob::dispatch($task)->onQueue('default');
+        foreach ($versions as $version) {
+            ProcessTrelloTaskJob::dispatch($version->id)->onQueue('default');
         }
 
-        $this->info("Queued {$tasks->count()} pending tasks.");
+        $this->info("Dispatched {$versions->count()} version(s).");
 
         return self::SUCCESS;
     }

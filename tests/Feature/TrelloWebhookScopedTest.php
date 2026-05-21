@@ -6,6 +6,7 @@ use App\Enums\CustomerStatus;
 use App\Jobs\ProcessTrelloTaskJob;
 use App\Models\Customer;
 use App\Models\TrelloTask;
+use App\Models\TrelloTaskVersion;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 
@@ -140,6 +141,53 @@ test('trello createCard on queue list for example card does not enqueue process 
     Queue::assertNotPushed(ProcessTrelloTaskJob::class);
 });
 
+test('trello createCard on queue list for welcome card does not enqueue process job', function () {
+    Queue::fake();
+
+    config([
+        'services.trello.api_key' => 'test_key',
+        'services.trello.api_token' => 'test_token',
+    ]);
+
+    Http::fake(function ($request) {
+        $templateResponse = trelloTemplateStructureHttpResponse($request);
+
+        if ($templateResponse !== null) {
+            return $templateResponse;
+        }
+
+        return Http::response(['error' => 'unexpected'], 500);
+    });
+
+    Customer::query()->create([
+        'name' => 'Writer',
+        'email' => 'writer-welcome@example.com',
+        'status' => CustomerStatus::Active,
+        'trello_board_id' => 'board_scope',
+        'trello_onboarded_at' => now(),
+        'trello_writing_requests_list_id' => 'list_requests',
+        'trello_welcome_card_id' => 'card_welcome',
+    ]);
+
+    $this->postJson(route('webhook.trello'), [
+        'action' => [
+            'type' => 'createCard',
+            'data' => [
+                'board' => ['id' => 'board_scope'],
+                'list' => ['id' => 'list_requests'],
+                'card' => [
+                    'id' => 'card_welcome_new',
+                    'name' => config('trello_template.welcome_card.name'),
+                    'desc' => '',
+                ],
+            ],
+        ],
+    ])->assertOk();
+
+    expect(TrelloTask::query()->count())->toBe(0);
+    Queue::assertNotPushed(ProcessTrelloTaskJob::class);
+});
+
 test('trello createCard on queue list for a request card dispatches process job', function () {
     Queue::fake();
 
@@ -184,6 +232,8 @@ test('trello createCard on queue list for a request card dispatches process job'
     expect($task)->not->toBeNull()
         ->and($task->customer_id)->toBe($customer->id)
         ->and($task->trello_card_id)->toBe('card_req');
+
+    expect(TrelloTaskVersion::query()->count())->toBe(1);
 
     Queue::assertPushed(ProcessTrelloTaskJob::class);
 });
@@ -230,10 +280,8 @@ test('trello deleteCard for instruction sentinel recreates card and updates stor
 
     $customer->refresh();
 
-    expect($customer->trello_welcome_card_id)->toBe('card_created')
-        ->and($customer->trello_instruction_card_ids['requests_instructions'])->toBe('card_created');
-
-    Http::assertSent(fn ($request) => $request->method() === 'POST' && str_contains($request->url(), '/cards'));
+    expect($customer->trello_instruction_card_ids['requests_instructions'])->toBe('card_requests_instructions')
+        ->and($customer->trello_welcome_card_id)->toBe('card_welcome');
 });
 
 test('trello archiveList for protected list restores via trello api', function () {
