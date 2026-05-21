@@ -15,6 +15,7 @@ class TrelloWebhookActionHandler
 {
     public function __construct(
         private TrelloService $trelloService,
+        private TrelloTemplateBoardService $templateBoard,
     ) {}
 
     /**
@@ -27,8 +28,8 @@ class TrelloWebhookActionHandler
         return match ($actionType) {
             'createCard' => $this->handleCreateCard($payload, $log),
             'deleteCard' => $this->handleDeleteCard($payload, $log),
-            'archiveList' => $this->handleWritingRequestsListArchiveOrDelete($payload, $log),
-            'deleteList' => $this->handleWritingRequestsListArchiveOrDelete($payload, $log),
+            'archiveList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
+            'deleteList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
             'updateList' => $this->handleUpdateList($payload, $log),
             default => $this->markProcessedAndIgnore($log),
         };
@@ -43,7 +44,7 @@ class TrelloWebhookActionHandler
         $wasClosed = (bool) data_get($payload, 'action.data.old.closed', false);
 
         if ($listClosed && ! $wasClosed) {
-            return $this->handleWritingRequestsListArchiveOrDelete($payload, $log);
+            return $this->handleProtectedListArchiveOrDelete($payload, $log);
         }
 
         return $this->markProcessedAndIgnore($log);
@@ -52,11 +53,12 @@ class TrelloWebhookActionHandler
     /**
      * @param  array<string, mixed>  $payload
      */
-    private function handleWritingRequestsListArchiveOrDelete(array $payload, WebhookLog $log): JsonResponse
+    private function handleProtectedListArchiveOrDelete(array $payload, WebhookLog $log): JsonResponse
     {
         $actionType = (string) data_get($payload, 'action.type', '');
         $boardId = (string) data_get($payload, 'action.data.board.id');
         $listId = (string) data_get($payload, 'action.data.list.id');
+        $listName = data_get($payload, 'action.data.list.name');
 
         $customer = Customer::query()->where('trello_board_id', $boardId)->first();
 
@@ -66,43 +68,21 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        if ($listId !== $customer->trello_writing_requests_list_id) {
+        if (! $this->templateBoard->isProtectedList($customer, $listId, is_string($listName) ? $listName : null)) {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
         }
 
         try {
-            if ($actionType === 'deleteList') {
-                $this->trelloService->recreateWritingRequestsColumn($customer->fresh());
-            } else {
-                try {
-                    $this->trelloService->unarchiveList($listId);
-                } catch (\Throwable $exception) {
-                    Log::warning('Trello unarchive Writing Requests from webhook failed; recreating column', [
-                        'customer_id' => $customer->id,
-                        'list_id' => $listId,
-                        'error' => $exception->getMessage(),
-                    ]);
-                    $this->trelloService->recreateWritingRequestsColumn($customer->fresh());
-                }
-            }
-
-            $customer->refresh();
-
-            if (
-                filled($customer->trello_writing_requests_list_id)
-                && filled($customer->trello_in_progress_list_id)
-                && filled($customer->trello_completed_list_id)
-            ) {
-                $this->trelloService->applyKanbanListOrder(
-                    (string) $customer->trello_writing_requests_list_id,
-                    (string) $customer->trello_in_progress_list_id,
-                    (string) $customer->trello_completed_list_id,
-                );
-            }
+            $this->trelloService->restoreProtectedList(
+                $customer->fresh(),
+                $listId,
+                $actionType,
+                is_string($listName) ? $listName : null,
+            );
         } catch (\Throwable $exception) {
-            Log::warning('Trello Writing Requests list restore failed', [
+            Log::warning('Trello protected list restore failed', [
                 'customer_id' => $customer->id,
                 'action_type' => $actionType,
                 'error' => $exception->getMessage(),
@@ -130,6 +110,7 @@ class TrelloWebhookActionHandler
         $boardId = (string) data_get($payload, 'action.data.board.id');
         $cardId = (string) data_get($payload, 'action.data.card.id');
         $listId = (string) data_get($payload, 'action.data.list.id');
+        $cardName = (string) data_get($payload, 'action.data.card.name', '');
 
         $customer = Customer::query()->where('trello_board_id', $boardId)->first();
 
@@ -143,16 +124,22 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        $writingListId = $this->trelloService->resolveAndPersistWritingRequestsList($customer);
+        $queueListId = $this->trelloService->resolveAndPersistWritingRequestsList($customer);
         $customer->refresh();
 
-        if ($writingListId === null || $listId !== $writingListId) {
+        if ($queueListId === null || $listId !== $queueListId) {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
         }
 
-        if (filled($customer->trello_welcome_card_id) && $cardId === $customer->trello_welcome_card_id) {
+        if ($this->templateBoard->instructionSlugForCard($customer, $cardId, $cardName) !== null) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        if ($this->templateBoard->isExampleCardName($cardName)) {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
@@ -162,7 +149,7 @@ class TrelloWebhookActionHandler
             'customer_id' => $customer->id,
             'trello_card_id' => $cardId,
             'trello_board_id' => $boardId,
-            'title' => (string) data_get($payload, 'action.data.card.name'),
+            'title' => $cardName,
             'description' => data_get($payload, 'action.data.card.desc'),
             'raw_payload' => $payload,
             'status' => TrelloTaskStatus::Received,
@@ -182,6 +169,7 @@ class TrelloWebhookActionHandler
     {
         $boardId = (string) data_get($payload, 'action.data.board.id');
         $cardId = (string) data_get($payload, 'action.data.card.id');
+        $cardName = (string) data_get($payload, 'action.data.card.name', '');
 
         $customer = Customer::query()->where('trello_board_id', $boardId)->first();
 
@@ -191,19 +179,21 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        if (! filled($customer->trello_welcome_card_id) || $cardId !== $customer->trello_welcome_card_id) {
+        $slug = $this->templateBoard->instructionSlugForCard($customer, $cardId, $cardName);
+
+        if ($slug === null) {
             $log->update(['status' => 'processed', 'processed_at' => now()]);
 
             return response()->json(['status' => 'ignored']);
         }
 
         try {
-            $newCardId = $this->trelloService->recreateWelcomeSentinel($customer->fresh());
-            $customer->update(['trello_welcome_card_id' => $newCardId]);
+            $this->trelloService->recreateInstructionCard($customer->fresh(), $slug);
         } catch (\Throwable $exception) {
-            Log::warning('Trello welcome sentinel recreate failed', [
+            Log::warning('Trello instruction card recreate failed', [
                 'customer_id' => $customer->id,
                 'board_id' => $boardId,
+                'slug' => $slug,
                 'error' => $exception->getMessage(),
             ]);
 

@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Tests\TestCase;
 
 /*
@@ -44,7 +45,93 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function trelloTemplateListFixtures(): array
 {
-    // ..
+    $lists = [];
+
+    foreach (config('trello_template.lists', []) as $key => $name) {
+        $lists[] = [
+            'id' => 'list_'.$key,
+            'name' => $name,
+            'closed' => false,
+        ];
+    }
+
+    return $lists;
+}
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function trelloTemplateInstructionCardFixtures(): array
+{
+    $cards = [];
+
+    foreach (config('trello_template.instruction_cards', []) as $slug => $definition) {
+        if (! is_array($definition)) {
+            continue;
+        }
+
+        $cards[] = [
+            'id' => 'card_'.$slug,
+            'idList' => 'list_'.($definition['list_key'] ?? 'requests'),
+            'name' => $definition['name'] ?? '',
+        ];
+    }
+
+    return $cards;
+}
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function trelloDefaultKanbanListFixtures(): array
+{
+    return trelloTemplateListFixtures();
+}
+
+/**
+ * @return array<mixed>|null
+ */
+function trelloTemplateStructureHttpResponse(Request $request): ?array
+{
+    $url = $request->url();
+    $method = $request->method();
+
+    if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/lists')) {
+        return trelloTemplateListFixtures();
+    }
+
+    if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/cards') && ! str_contains($url, '/actions')) {
+        return trelloTemplateInstructionCardFixtures();
+    }
+
+    if ($method === 'GET' && str_contains($url, '/boards/') && str_contains($url, '/labels')) {
+        return [];
+    }
+
+    if ($method === 'PUT' && str_contains($url, '/lists/')) {
+        return ['id' => 'list_ok'];
+    }
+
+    if ($method === 'PUT' && preg_match('#/boards/[^/]+$#', parse_url($url, PHP_URL_PATH) ?: '')) {
+        return ['id' => 'board_ok'];
+    }
+
+    if ($method === 'POST' && str_ends_with(parse_url($url, PHP_URL_PATH) ?: '', '/lists')) {
+        return ['id' => 'list_created'];
+    }
+
+    if ($method === 'POST' && str_contains($url, '/cards') && ! str_contains($url, '/idLabels')) {
+        return ['id' => 'card_created'];
+    }
+
+    if ($method === 'POST' && str_contains($url, '/idLabels')) {
+        return [];
+    }
+
+    return null;
 }
