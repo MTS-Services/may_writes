@@ -12,9 +12,7 @@
 /resources/js/wayfinder
 /vendor
 .DS_Store
-.env
 .env.backup
-.env.production
 .phpactor.json
 .phpunit.result.cache
 Homestead.json
@@ -27,3 +25,4 @@ yarn-error.log
 /.nova
 /.vscode
 /.zed
+config.bat
