@@ -1,4 +1,5 @@
 import { router } from '@inertiajs/react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -8,6 +9,7 @@ import {
     CardHeader,
     CardTitle,
 } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
     Table,
     TableBody,
@@ -16,8 +18,9 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
+import { customers as customersIndex } from '@/routes/admin';
 import { show as customerShow } from '@/routes/admin/customers';
-import { ChevronRight, ExternalLink, Users } from 'lucide-react';
+import { ChevronRight, ExternalLink, Search, Users, X } from 'lucide-react';
 
 type Customer = {
     id: number;
@@ -39,6 +42,49 @@ type PaginatedCustomers = {
     links: Array<{ url: string | null; label: string; active: boolean }>;
 };
 
+type CustomerFilters = {
+    status?: string;
+    plan_id?: string;
+    search?: string;
+};
+
+function buildCustomersQuery(
+    search: string,
+    filters: CustomerFilters,
+): Record<string, string> {
+    const query: Record<string, string> = {};
+
+    if (filters.status) {
+        query.status = filters.status;
+    }
+
+    if (filters.plan_id) {
+        query.plan_id = filters.plan_id;
+    }
+
+    const trimmed = search.trim();
+
+    if (trimmed !== '') {
+        query.search = trimmed;
+    }
+
+    return query;
+}
+
+function visitCustomersIndex(search: string, filters: CustomerFilters): void {
+    router.get(
+        customersIndex.url({
+            query: buildCustomersQuery(search, filters),
+        }),
+        {},
+        {
+            preserveScroll: true,
+            preserveState: true,
+            replace: true,
+        },
+    );
+}
+
 function statusBadgeVariant(
     status: string,
 ): 'default' | 'secondary' | 'destructive' | 'outline' {
@@ -55,9 +101,29 @@ function statusBadgeVariant(
 
 export default function AdminCustomersIndexPage({
     customers,
+    filters,
 }: {
     customers: PaginatedCustomers;
+    filters: CustomerFilters;
 }) {
+    const [search, setSearch] = useState(filters.search ?? '');
+
+    useEffect(() => {
+        setSearch(filters.search ?? '');
+    }, [filters.search]);
+
+    const handleSearchSubmit = (event: FormEvent<HTMLFormElement>): void => {
+        event.preventDefault();
+        visitCustomersIndex(search, filters);
+    };
+
+    const handleClearSearch = (): void => {
+        setSearch('');
+        visitCustomersIndex('', filters);
+    };
+
+    const hasActiveSearch = (filters.search ?? '').trim() !== '';
+
     return (
         <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -81,26 +147,72 @@ export default function AdminCustomersIndexPage({
                 ) : null}
             </div>
 
-            <Card className="overflow-hidden rounded-xl border bg-card shadow-sm p-0">
+            <Card className="overflow-hidden rounded-xl border bg-card p-0 shadow-sm">
                 <CardHeader className="border-b bg-muted/30 py-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0 flex-1 space-y-1">
                             <CardTitle className="text-base">All customers</CardTitle>
                             <CardDescription>
                                 Select a row to open the customer profile
                             </CardDescription>
+                            {customers.last_page > 1 ? (
+                                <p className="text-xs text-muted-foreground lg:hidden">
+                                    Page {customers.current_page} of {customers.last_page}
+                                </p>
+                            ) : null}
                         </div>
-                        {customers.last_page > 1 ? (
-                            <p className="text-sm text-muted-foreground">
-                                Page {customers.current_page} of {customers.last_page}
-                            </p>
-                        ) : null}
+                        <form
+                            onSubmit={handleSearchSubmit}
+                            className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-full lg:max-w-md lg:shrink-0 xl:max-w-lg"
+                            role="search"
+                            aria-label="Search customers"
+                        >
+                            <div className="relative min-w-0 flex-1">
+                                <Search
+                                    className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                                    aria-hidden
+                                />
+                                <Input
+                                    type="search"
+                                    name="search"
+                                    value={search}
+                                    onChange={(event) => setSearch(event.target.value)}
+                                    placeholder="Search by name or email"
+                                    className="h-10 bg-background pl-9"
+                                    autoComplete="off"
+                                />
+                            </div>
+                            <div className="flex shrink-0 gap-2">
+                                <Button type="submit" className="flex-1 gap-2 sm:flex-none">
+                                    <Search className="size-4" aria-hidden />
+                                    Search
+                                </Button>
+                                {hasActiveSearch ? (
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="gap-1.5"
+                                        onClick={handleClearSearch}
+                                    >
+                                        <X className="size-4" aria-hidden />
+                                        <span className="sr-only sm:not-sr-only">Clear</span>
+                                    </Button>
+                                ) : null}
+                            </div>
+                        </form>
                     </div>
+                    {customers.last_page > 1 ? (
+                        <p className="mt-3 hidden text-sm text-muted-foreground lg:block">
+                            Page {customers.current_page} of {customers.last_page}
+                        </p>
+                    ) : null}
                 </CardHeader>
                 <CardContent className="p-0">
                     {customers.data.length === 0 ? (
                         <p className="px-6 py-12 text-center text-sm text-muted-foreground">
-                            No customers found.
+                            {hasActiveSearch
+                                ? `No customers match "${filters.search}".`
+                                : 'No customers found.'}
                         </p>
                     ) : (
                         <Table>

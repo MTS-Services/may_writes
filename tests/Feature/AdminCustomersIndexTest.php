@@ -34,3 +34,40 @@ test('admin customers index paginates results', function () {
             ->where('customers.current_page', 2)
             ->has('customers.data', 3));
 });
+
+test('admin customers index filters by name or email via search query param', function () {
+    $user = User::factory()->create();
+
+    Customer::query()->create([
+        'name' => 'Unique Alpha',
+        'email' => 'alpha@example.com',
+        'status' => CustomerStatus::Active,
+    ]);
+
+    Customer::query()->create([
+        'name' => 'Other User',
+        'email' => 'beta.unique@example.com',
+        'status' => CustomerStatus::Active,
+    ]);
+
+    Customer::query()->create([
+        'name' => 'Someone Else',
+        'email' => 'other@example.com',
+        'status' => CustomerStatus::Active,
+    ]);
+
+    $this->actingAs($user)
+        ->get(route('admin.customers', ['search' => 'Unique Alpha']))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->where('filters.search', 'Unique Alpha')
+            ->where('customers.total', 1)
+            ->where('customers.data.0.name', 'Unique Alpha'));
+
+    $this->actingAs($user)
+        ->get(route('admin.customers', ['search' => 'beta.unique@']))
+        ->assertOk()
+        ->assertInertia(fn ($page) => $page
+            ->where('customers.total', 1)
+            ->where('customers.data.0.email', 'beta.unique@example.com'));
+});
