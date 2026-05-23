@@ -1,5 +1,12 @@
 import { Link } from '@inertiajs/react';
-import { BookOpen, FolderGit2, LayoutGrid } from 'lucide-react';
+import {
+    BookOpen,
+    FileText,
+    FolderGit2,
+    LayoutGrid,
+    Settings,
+    Users,
+} from 'lucide-react';
 import AppLogo from '@/components/app-logo';
 import { NavFooter } from '@/components/nav-footer';
 import { NavMain } from '@/components/nav-main';
@@ -13,7 +20,13 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { dashboard } from '@/routes';
+import {
+    customers,
+    dashboard,
+    settings,
+    writingRequests,
+} from '@/routes/admin';
+import { edit as trelloEdit } from '@/routes/admin/trello';
 import type { NavItem } from '@/types';
 
 const mainNavItems: NavItem[] = [
@@ -22,20 +35,41 @@ const mainNavItems: NavItem[] = [
         href: dashboard(),
         icon: LayoutGrid,
     },
+    {
+        title: 'Customers',
+        href: customers(),
+        icon: Users,
+    },
+
+    // {
+    //     title: 'Writing requests',
+    //     href: writingRequests(),
+    //     icon: FileText,
+    // },
+    // {
+    //     title: 'Trello',
+    //     href: trelloEdit(),
+    //     icon: LayoutGrid,
+    // },
+    // {
+    //     title: 'Settings',
+    //     href: settings(),
+    //     icon: Settings,
+    // },
 ];
 
-const footerNavItems: NavItem[] = [
-    {
-        title: 'Repository',
-        href: 'https://github.com/laravel/react-starter-kit',
-        icon: FolderGit2,
-    },
-    {
-        title: 'Documentation',
-        href: 'https://laravel.com/docs/starter-kits#react',
-        icon: BookOpen,
-    },
-];
+// const footerNavItems: NavItem[] = [
+//     {
+//         title: 'Repository',
+//         href: 'https://github.com/laravel/react-starter-kit',
+//         icon: FolderGit2,
+//     },
+//     {
+//         title: 'Documentation',
+//         href: 'https://laravel.com/docs/starter-kits#react',
+//         icon: BookOpen,
+//     },
+// ];
 
 export function AppSidebar() {
     return (
@@ -57,7 +91,7 @@ export function AppSidebar() {
             </SidebarContent>
 
             <SidebarFooter>
-                <NavFooter items={footerNavItems} className="mt-auto" />
+                {/* <NavFooter items={footerNavItems} className="mt-auto" /> */}
                 <NavUser />
             </SidebarFooter>
         </Sidebar>

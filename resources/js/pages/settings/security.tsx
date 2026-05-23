@@ -149,7 +149,7 @@ export default function Security({
                 </Form>
             </div>
 
-            {canManageTwoFactor && (
+            {/* {canManageTwoFactor && (
                 <div className="space-y-6">
                     <Heading
                         variant="small"
@@ -234,7 +234,7 @@ export default function Security({
                         errors={errors}
                     />
                 </div>
-            )}
+            )} */}
         </>
     );
 }

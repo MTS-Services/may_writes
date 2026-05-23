@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Plan;
 use App\Models\TrelloTask;
+use App\Models\TrelloTaskVersion;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -33,31 +35,21 @@ class AdminCustomerController extends Controller
         ]);
     }
 
-    public function show(Customer $customer): Response
+    public function show(Request $request, Customer $customer): Response
     {
         $customer->load('plan');
 
+        /** @var LengthAwarePaginator<int, array<string, mixed>> $tasks */
         $tasks = $customer->trelloTasks()
-            ->with('latestVersion')
+            ->withCount('versions')
+            ->with([
+                'latestVersion',
+                'versions' => fn ($query) => $query->reorder('version_number', 'desc'),
+            ])
             ->latest()
-            ->take(10)
-            ->get()
-            ->map(function (TrelloTask $task): array {
-                $latestVersion = $task->latestVersion;
-
-                return [
-                    'id' => $task->id,
-                    'title' => $task->title,
-                    'workflow_status' => $task->workflow_status->value,
-                    'workflow_label' => $task->workflow_status->label(),
-                    'pipeline_status' => $latestVersion?->pipeline_status->value,
-                    'document_path' => $latestVersion?->document_path,
-                    'document_filename' => $latestVersion?->document_filename,
-                    'has_document' => filled($latestVersion?->document_path),
-                ];
-            })
-            ->values()
-            ->all();
+            ->paginate(10)
+            ->withQueryString()
+            ->through(fn (TrelloTask $task): array => $this->formatTaskForCustomerShow($task));
 
         return Inertia::render('admin/customers/show', [
             'customer' => [
@@ -71,5 +63,35 @@ class AdminCustomerController extends Controller
             ],
             'tasks' => $tasks,
         ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatTaskForCustomerShow(TrelloTask $task): array
+    {
+        $latestVersion = $task->latestVersion;
+        $latestVersionId = $task->latest_version_id;
+
+        return [
+            'id' => $task->id,
+            'title' => $task->title,
+            'created_at' => $task->created_at?->toIso8601String(),
+            'workflow_status' => $task->workflow_status->value,
+            'workflow_label' => $task->workflow_status->label(),
+            'pipeline_status' => $latestVersion?->pipeline_status->value,
+            'versions_count' => (int) $task->versions_count,
+            'versions' => $task->versions->map(fn (TrelloTaskVersion $version): array => [
+                'id' => $version->id,
+                'version_number' => $version->version_number,
+                'trigger' => $version->trigger->value,
+                'pipeline_status' => $version->pipeline_status->value,
+                'was_truncated' => $version->was_truncated,
+                'document_filename' => $version->document_filename,
+                'processed_at' => $version->processed_at?->toIso8601String(),
+                'is_latest' => $version->id === $latestVersionId,
+                'has_document' => filled($version->document_path),
+            ])->values()->all(),
+        ];
     }
 }

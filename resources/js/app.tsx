@@ -3,8 +3,6 @@ import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { initializeTheme } from '@/hooks/use-appearance';
 import AppLayout from '@/layouts/app-layout';
-import AdminLayout from '@/layouts/admin-layout';
-import AuthLayout from '@/layouts/auth-layout';
 import SettingsLayout from '@/layouts/settings/layout';
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import FrontendLayout from './layouts/frontend-layout';
@@ -16,9 +14,9 @@ createInertiaApp({
     layout: (name) => {
         switch (true) {
             case name.startsWith('admin/'):
-                return AdminLayout;
+                return AppLayout;
             case name.startsWith('auth/'):
-                return AuthLayout;
+                return AppLayout;
             case name.startsWith('settings/'):
                 return [AppLayout, SettingsLayout];
             default:

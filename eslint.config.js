@@ -132,4 +132,4 @@ export default [
             '@stylistic/brace-style': ['error', '1tbs', { allowSingleLine: false }],
         },
     },
-]; 
+];
