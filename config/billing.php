@@ -45,6 +45,7 @@ return [
 
     'alerts' => [
         'onboarding_failure_email' => env('BILLING_ONBOARDING_FAILURE_EMAIL'),
+        'new_request_email' => env('BILLING_NEW_REQUEST_EMAIL', env('BILLING_ONBOARDING_FAILURE_EMAIL')),
     ],
 
     /*

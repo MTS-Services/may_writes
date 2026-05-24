@@ -29,6 +29,8 @@ class CheckoutController extends Controller
         $validated = $request->validate([
             'plan_id' => ['required', 'integer'],
             'email' => ['nullable', 'email', 'max:255'],
+            'accepted_terms' => ['required', 'accepted'],
+            'terms_version' => ['required', 'string', 'in:'.config('legal.terms_version')],
         ]);
 
         $plan = Plan::query()
@@ -62,10 +64,14 @@ class CheckoutController extends Controller
         try {
             Stripe::setApiKey((string) config('cashier.secret'));
 
+            $termsAcceptedAt = now()->toIso8601String();
+
             $subscriptionData = $this->subscriptionTrial->applyTrialToSubscriptionData(
                 [
                     'metadata' => [
                         'plan_id' => (string) $plan->id,
+                        'terms_version' => $validated['terms_version'],
+                        'terms_accepted_at' => $termsAcceptedAt,
                     ],
                 ],
                 $email,
@@ -85,6 +91,8 @@ class CheckoutController extends Controller
                 'metadata' => [
                     'plan_id' => (string) $plan->id,
                     'plan_slug' => $plan->slug,
+                    'terms_version' => $validated['terms_version'],
+                    'terms_accepted_at' => $termsAcceptedAt,
                 ],
                 'subscription_data' => $subscriptionData,
             ];

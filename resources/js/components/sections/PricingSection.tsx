@@ -1,7 +1,9 @@
+import { usePage } from '@inertiajs/react';
 import { useEffect, useState } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+import { CheckoutTermsAcceptance } from '@/components/checkout/CheckoutTermsAcceptance';
 import { CheckoutTrialDialog } from '@/components/checkout/CheckoutTrialDialog';
 import { SectionHeading } from '@/components/sections/SectionHeading';
 import { Badge } from '@/components/ui/badge';
@@ -28,12 +30,22 @@ type Plan = {
   checkout_available?: boolean;
 };
 
+type SharedProps = {
+  legal?: {
+    termsVersion: string;
+  };
+};
+
 export function PricingSection() {
+  const { legal } = usePage<SharedProps>().props;
+  const termsVersion = legal?.termsVersion ?? '2026-05-01';
+
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoadingPlans, setIsLoadingPlans] = useState(true);
   const [loadingPlanId, setLoadingPlanId] = useState<number | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [trialDialogOpen, setTrialDialogOpen] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
 
   useEffect(() => {
@@ -68,6 +80,12 @@ export function PricingSection() {
       return;
     }
 
+    if (!termsAccepted) {
+      toast.error('Please accept the Terms and Conditions to continue.');
+
+      return;
+    }
+
     setLoadingPlanId(plan.id);
 
     try {
@@ -80,7 +98,11 @@ export function PricingSection() {
           Accept: 'application/json',
           ...(token ? { 'X-CSRF-TOKEN': token } : {}),
         },
-        body: JSON.stringify({ plan_id: plan.id }),
+        body: JSON.stringify({
+          plan_id: plan.id,
+          accepted_terms: true,
+          terms_version: termsVersion,
+        }),
       });
 
       const payload = (await response.json()) as { checkout_url?: string; message?: string };
@@ -99,6 +121,12 @@ export function PricingSection() {
 
   const handleGetStarted = (plan: Plan): void => {
     if (plan.checkout_available === false) {
+      return;
+    }
+
+    if (!termsAccepted) {
+      toast.error('Please accept the Terms and Conditions to continue.');
+
       return;
     }
 
@@ -132,6 +160,13 @@ export function PricingSection() {
             </>
           }
           description="No hidden fees. No per-word billing. Just a flat monthly rate for unlimited writing requests."
+        />
+        <CheckoutTermsAcceptance
+          checked={termsAccepted}
+          onCheckedChange={setTermsAccepted}
+          termsVersion={termsVersion}
+          disabled={loadingPlanId !== null}
+          className="mb-8"
         />
         <div className="grid gap-5 lg:grid-cols-3 lg:items-start">
           {isLoadingPlans &&
@@ -208,7 +243,7 @@ export function PricingSection() {
                     className="w-full"
                     size="lg"
                     variant={plan.is_featured ? 'default' : 'secondary'}
-                    disabled={loadingPlanId !== null || plan.checkout_available === false}
+                    disabled={loadingPlanId !== null || plan.checkout_available === false || !termsAccepted}
                     onClick={() => handleGetStarted(plan)}
                   >
                     {plan.checkout_available === false ? (
@@ -235,6 +270,8 @@ export function PricingSection() {
         trialDays={selectedPlan?.trial?.days ?? 7}
         onContinue={handleTrialContinue}
         isContinuing={selectedPlan !== null && loadingPlanId === selectedPlan.id}
+        termsAccepted={termsAccepted}
+        termsVersion={termsVersion}
       />
     </section>
   );
