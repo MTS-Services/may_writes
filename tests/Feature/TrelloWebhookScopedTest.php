@@ -188,7 +188,7 @@ test('trello createCard on queue list for welcome card does not enqueue process 
     Queue::assertNotPushed(ProcessTrelloTaskJob::class);
 });
 
-test('trello createCard on queue list for a request card dispatches process job', function () {
+test('trello createCard on queue list for a request card tracks task without dispatching process job', function () {
     Queue::fake();
 
     config([
@@ -233,9 +233,9 @@ test('trello createCard on queue list for a request card dispatches process job'
         ->and($task->customer_id)->toBe($customer->id)
         ->and($task->trello_card_id)->toBe('card_req');
 
-    expect(TrelloTaskVersion::query()->count())->toBe(1);
+    expect(TrelloTaskVersion::query()->count())->toBe(0);
 
-    Queue::assertPushed(ProcessTrelloTaskJob::class);
+    Queue::assertNotPushed(ProcessTrelloTaskJob::class);
 });
 
 test('trello deleteCard for instruction sentinel recreates card and updates stored id', function () {
