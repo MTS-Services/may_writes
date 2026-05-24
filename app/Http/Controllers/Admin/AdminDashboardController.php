@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Enums\CustomerStatus;
+use App\Enums\TrelloTaskVersionTrigger;
 use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\Plan;
@@ -35,6 +36,21 @@ class AdminDashboardController extends Controller
             'totalTasks' => TrelloTask::count(),
             'recentCustomers' => Customer::with('plan')->latest()->take(5)->get(),
             'recentTasks' => TrelloTask::with('customer')->latest()->take(5)->get(),
+            'recentSubmittedRequests' => TrelloTaskVersion::query()
+                ->where('trigger', TrelloTaskVersionTrigger::RequestCompleted)
+                ->whereNotNull('submitted_at')
+                ->with(['task.customer'])
+                ->latest('submitted_at')
+                ->take(8)
+                ->get()
+                ->map(fn (TrelloTaskVersion $version): array => [
+                    'id' => $version->id,
+                    'title' => $version->title,
+                    'submitted_at' => $version->submitted_at?->toIso8601String(),
+                    'customer_name' => $version->task?->customer?->name,
+                    'customer_email' => $version->task?->customer?->email,
+                    'task_id' => $version->trello_task_id,
+                ]),
             'customersByPlan' => $customersByPlan,
             'monthlyRevenue' => $monthlyRevenue,
             'plans' => Plan::all(),

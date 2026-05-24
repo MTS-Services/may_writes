@@ -8,6 +8,7 @@ use App\Http\Controllers\Admin\AdminTrelloSettingsController;
 use App\Http\Controllers\Admin\AdminWritingRequestController;
 use App\Http\Controllers\CheckoutController;
 use App\Http\Controllers\HomeController;
+use App\Http\Controllers\TermsController;
 use App\Http\Controllers\WebhookController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -17,6 +18,7 @@ use Inertia\Inertia;
 // ])->name('home');
 
 Route::get('/', [HomeController::class, 'index'])->name('home');
+Route::get('/terms', [TermsController::class, 'show'])->name('terms.show');
 
 Route::post('/checkout', [CheckoutController::class, 'createSession'])->name('checkout.create');
 Route::get('/checkout/success', [CheckoutController::class, 'success'])->name('checkout.success');

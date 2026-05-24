@@ -4,6 +4,8 @@ namespace App\Enums;
 
 enum TrelloTaskPipelineStatus: string
 {
+    case AwaitingSubmission = 'awaiting_submission';
+
     case Queued = 'queued';
     case Processing = 'processing';
     case Summarized = 'summarized';
