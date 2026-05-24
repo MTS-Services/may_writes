@@ -10,7 +10,7 @@ use App\Models\TrelloTaskVersion;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 
-test('updateCard description change on queue creates new version when fingerprint changes', function () {
+test('updateCard description change on queue updates task without dispatching process job', function () {
     Queue::fake();
 
     config([
@@ -58,8 +58,10 @@ test('updateCard description change on queue creates new version when fingerprin
         ],
     ])->assertOk();
 
-    expect(TrelloTaskVersion::query()->where('trello_task_id', $task->id)->count())->toBe(2);
-    Queue::assertPushed(ProcessTrelloTaskJob::class);
+    $task->refresh();
+    expect($task->description)->toBe('updated text here')
+        ->and(TrelloTaskVersion::query()->where('trello_task_id', $task->id)->count())->toBe(1);
+    Queue::assertNotPushed(ProcessTrelloTaskJob::class);
 });
 
 test('updateCard with same description fingerprint does not create version', function () {
