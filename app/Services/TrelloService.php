@@ -1275,7 +1275,7 @@ class TrelloService
 
     private function welcomeCardDescription(Customer $customer): string
     {
-        return "Hi {$customer->name}! To submit a writing request, create a new card in this list with:\n\n**Title**: What type of content you need\n**Description**: Details, tone, target audience, keywords, word count\n\nWe'll deliver your draft and move the card to 'In Progress', then 'Done' when complete.\n\nQuestions? Email hello@maywrites.co";
+        return "Hi {$customer->name}! Welcome to MayWrites — we're glad you're here.\n\nQuestions? Email hello@maywrites.co";
     }
 
     private function welcomeCardSentinelDescription(Customer $customer): string
