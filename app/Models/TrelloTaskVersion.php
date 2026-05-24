@@ -25,6 +25,7 @@ class TrelloTaskVersion extends Model
         'document_path',
         'document_filename',
         'pipeline_status',
+        'submitted_at',
         'processed_at',
         'failed_reason',
         'raw_payload',
@@ -36,6 +37,7 @@ class TrelloTaskVersion extends Model
             'trigger' => TrelloTaskVersionTrigger::class,
             'pipeline_status' => TrelloTaskPipelineStatus::class,
             'was_truncated' => 'boolean',
+            'submitted_at' => 'datetime',
             'processed_at' => 'datetime',
             'raw_payload' => 'array',
         ];

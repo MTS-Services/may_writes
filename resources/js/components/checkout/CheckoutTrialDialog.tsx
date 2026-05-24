@@ -1,5 +1,6 @@
 import { Gift } from 'lucide-react';
 
+import { CheckoutTermsAcceptance } from '@/components/checkout/CheckoutTermsAcceptance';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -23,6 +24,8 @@ type CheckoutTrialDialogProps = {
   trialDays: number;
   onContinue: () => void;
   isContinuing?: boolean;
+  termsAccepted: boolean;
+  termsVersion: string;
 };
 
 export function CheckoutTrialDialog({
@@ -32,6 +35,8 @@ export function CheckoutTrialDialog({
   trialDays,
   onContinue,
   isContinuing = false,
+  termsAccepted,
+  termsVersion,
 }: CheckoutTrialDialogProps) {
   if (!plan) {
     return null;
@@ -57,11 +62,17 @@ export function CheckoutTrialDialog({
           <li>Cancel anytime from your account or by contacting support.</li>
         </ul>
 
+        {!termsAccepted ? (
+          <p className="text-sm text-muted-foreground">
+            Accept the Terms and Conditions in the pricing section before continuing to checkout.
+          </p>
+        ) : null}
+
         <DialogFooter className="gap-2">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isContinuing}>
             Close
           </Button>
-          <Button type="button" onClick={onContinue} disabled={isContinuing}>
+          <Button type="button" onClick={onContinue} disabled={isContinuing || !termsAccepted}>
             {isContinuing ? 'Redirecting…' : 'Continue to checkout'}
           </Button>
         </DialogFooter>

@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Enums\TrelloTaskVersionTrigger;
 use App\Models\Customer;
 use App\Models\TrelloTask;
 use App\Models\WebhookLog;
@@ -29,6 +28,7 @@ class TrelloWebhookActionHandler
         return match ($actionType) {
             'createCard' => $this->handleCreateCard($payload, $log),
             'updateCard' => $this->handleUpdateCard($payload, $log),
+            'addLabelToCard' => $this->handleAddLabelToCard($payload, $log),
             'deleteCard' => $this->handleDeleteCard($payload, $log),
             'archiveList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
             'deleteList' => $this->handleProtectedListArchiveOrDelete($payload, $log),
@@ -117,15 +117,13 @@ class TrelloWebhookActionHandler
         $task = TrelloTask::query()->where('trello_card_id', $cardId)->first();
 
         if ($task === null) {
-            $this->writingRequests->createTaskFromWebhook(
+            $this->writingRequests->trackTaskFromWebhook(
                 $customer,
                 $cardId,
                 $boardId,
                 $currentListId,
                 $cardName,
                 $newDescription,
-                $payload,
-                TrelloTaskVersionTrigger::Updated,
             );
 
             $log->update(['status' => 'processed', 'processed_at' => now()]);
@@ -139,20 +137,80 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        $this->writingRequests->createTaskFromWebhook(
+        $this->writingRequests->trackTaskFromWebhook(
             $customer,
             $cardId,
             $boardId,
             $currentListId,
             $cardName,
             $newDescription,
-            $payload,
-            TrelloTaskVersionTrigger::Updated,
         );
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);
 
         return response()->json(['status' => 'processed']);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function handleAddLabelToCard(array $payload, WebhookLog $log): JsonResponse
+    {
+        $boardId = (string) data_get($payload, 'action.data.board.id');
+        $cardId = (string) data_get($payload, 'action.data.card.id');
+        $cardName = (string) data_get($payload, 'action.data.card.name', '');
+        $labelName = (string) data_get($payload, 'action.data.label.name', '');
+        $listId = (string) (data_get($payload, 'action.data.list.id')
+            ?? data_get($payload, 'action.data.card.idList')
+            ?? '');
+
+        $customer = Customer::query()->where('trello_board_id', $boardId)->first();
+
+        if ($customer === null || $cardId === '' || $labelName === '') {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $expectedLabel = (string) config('trello_template.request_completed_label_name', 'Request Completed');
+
+        if (strcasecmp($labelName, $expectedLabel) !== 0) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        if ($this->shouldIgnoreCard($customer, $cardId, $cardName)) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $queueListId = $customer->trello_writing_requests_list_id;
+
+        if ($queueListId === null || ($listId !== '' && $listId !== $queueListId)) {
+            $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+            return response()->json(['status' => 'ignored']);
+        }
+
+        $description = (string) data_get($payload, 'action.data.card.desc', '');
+
+        $version = $this->writingRequests->processRequestCompletedLabel(
+            $customer,
+            $cardId,
+            $boardId,
+            $listId !== '' ? $listId : (string) $queueListId,
+            $cardName,
+            $description,
+            $payload,
+        );
+
+        $log->update(['status' => 'processed', 'processed_at' => now()]);
+
+        return response()->json([
+            'status' => $version === null ? 'ignored' : 'processed',
+        ]);
     }
 
     /**
@@ -244,15 +302,13 @@ class TrelloWebhookActionHandler
             return response()->json(['status' => 'ignored']);
         }
 
-        $this->writingRequests->createTaskFromWebhook(
+        $this->writingRequests->trackTaskFromWebhook(
             $customer,
             $cardId,
             $boardId,
             $listId,
             $cardName,
             data_get($payload, 'action.data.card.desc'),
-            $payload,
-            TrelloTaskVersionTrigger::Created,
         );
 
         $log->update(['status' => 'processed', 'processed_at' => now()]);

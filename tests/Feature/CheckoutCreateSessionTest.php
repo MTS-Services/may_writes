@@ -38,6 +38,8 @@ test('checkout returns service unavailable when stripe secret is missing', funct
 
     $this->postJson(route('checkout.create'), [
         'plan_id' => $plan->id,
+        'accepted_terms' => true,
+        'terms_version' => config('legal.terms_version'),
     ], [
         'X-CSRF-TOKEN' => csrf_token(),
     ])
@@ -66,6 +68,8 @@ test('checkout returns unprocessable when plan price is zero', function () {
 
     $this->postJson(route('checkout.create'), [
         'plan_id' => $plan->id,
+        'accepted_terms' => true,
+        'terms_version' => config('legal.terms_version'),
     ], [
         'X-CSRF-TOKEN' => csrf_token(),
     ])

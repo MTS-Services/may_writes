@@ -199,7 +199,11 @@ export const faqs = [
     // },
     {
         q: 'Can I cancel my subscription?',
-        a: 'Yes, you can cancel your subscription at any time. There are no contracts or lock-ins.',
+        a: 'Yes. Cancel anytime through Stripe or by emailing hello@maywrites.co. There are no contracts or lock-ins. Your subscription stops renewing at the end of the current billing period, and you keep access to your Trello board until that period ends.',
+    },
+    {
+        q: 'Do Growth plans include a dedicated Slack channel?',
+        a: 'Yes. Growth subscribers can request a private Slack channel for faster communication. After you subscribe, email hello@maywrites.co and we will send your invite.',
     },
     {
         q: 'Do you write in my brand voice?',
@@ -239,5 +243,6 @@ export const footerLinks = [
     { label: 'Pricing', href: '#pricing' },
     { label: 'How it works', href: '#how' },
     { label: 'FAQ', href: '#faq' },
+    { label: 'Terms', href: '/terms', external: true },
     { label: 'Contact', href: 'mailto:hello@maywrites.co' },
 ];
