@@ -6,4 +6,5 @@ enum TrelloTaskVersionTrigger: string
 {
     case Created = 'created';
     case Updated = 'updated';
+    case RequestCompleted = 'request_completed';
 }

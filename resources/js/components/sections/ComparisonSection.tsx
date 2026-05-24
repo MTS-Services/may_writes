@@ -14,6 +14,7 @@ export function ComparisonSection() {
     <section id="compare" className="bg-card px-5 py-24 sm:px-10">
       <div className="mx-auto max-w-[1160px]">
         <SectionHeading
+          align="center"
           eyebrow="Why MayWrites"
           title={
             <>
