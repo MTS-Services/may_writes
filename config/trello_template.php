@@ -10,6 +10,8 @@ return [
 
     'welcome_card_name_prefix' => '👋 Welcome to MayWrites',
 
+    'request_completed_label_name' => 'Request Completed',
+
     /*
     |--------------------------------------------------------------------------
     | Client welcome card (separate from instruction sentinels)

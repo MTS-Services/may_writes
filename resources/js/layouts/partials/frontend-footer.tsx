@@ -18,6 +18,14 @@ export function FrontendFooter() {
               >
                 {link.label}
               </a>
+            ) : 'external' in link && link.external ? (
+              <Link
+                key={link.href}
+                className="text-[13px] text-background/35 transition-colors hover:text-background/70"
+                href={link.href}
+              >
+                {link.label}
+              </Link>
             ) : (
               <Link
                 key={link.href}
