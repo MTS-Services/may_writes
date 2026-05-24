@@ -76,6 +76,7 @@ class PlansSeeder extends Seeder
                     'Unlimited total requests',
                     'Priority turnaround',
                     'Unlimited revisions',
+                    'Dedicated Slack channel (on request)',
                     'All content types + strategy',
                 ],
             ],

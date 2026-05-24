@@ -1,3 +1,4 @@
+import { Link } from '@inertiajs/react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
     Users,
@@ -7,11 +8,21 @@ import {
     ArrowUpRight,
 } from 'lucide-react';
 
+type SubmittedRequest = {
+    id: number;
+    title: string;
+    submitted_at: string | null;
+    customer_name: string | null;
+    customer_email: string | null;
+    task_id: number;
+};
+
 type DashboardProps = {
     totalCustomers: number;
     activeCustomers: number;
     totalTasks: number;
     totalFiles: number;
+    recentSubmittedRequests: SubmittedRequest[];
 };
 
 export default function AdminDashboardPage({
@@ -19,6 +30,7 @@ export default function AdminDashboardPage({
     activeCustomers,
     totalTasks,
     totalFiles,
+    recentSubmittedRequests = [],
 }: DashboardProps) {
     const stats = [
         {
@@ -102,6 +114,50 @@ export default function AdminDashboardPage({
                     );
                 })}
             </div>
+
+            <Card className="rounded-xl border border-border">
+                <CardHeader className="flex flex-row items-center justify-between">
+                    <div>
+                        <CardTitle className="text-base">Recent submitted requests</CardTitle>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                            Cards labeled Request Completed on client boards.
+                        </p>
+                    </div>
+                    <Link
+                        href="/admin/writing-requests"
+                        className="text-sm font-medium text-primary hover:underline"
+                    >
+                        View all
+                    </Link>
+                </CardHeader>
+                <CardContent>
+                    {recentSubmittedRequests.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No submitted requests yet.</p>
+                    ) : (
+                        <ul className="divide-y divide-border">
+                            {recentSubmittedRequests.map((request) => (
+                                <li
+                                    key={request.id}
+                                    className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                    <div>
+                                        <p className="font-medium text-foreground">{request.title}</p>
+                                        <p className="text-sm text-muted-foreground">
+                                            {request.customer_name ?? 'Unknown'} ·{' '}
+                                            {request.customer_email ?? '—'}
+                                        </p>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        {request.submitted_at
+                                            ? new Date(request.submitted_at).toLocaleString()
+                                            : '—'}
+                                    </p>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </CardContent>
+            </Card>
         </div>
     );
 }
